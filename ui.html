@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Hershey Text Converter</title>
+    <style>
+        /* Basic styling for the plugin UI */
+        body {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            padding: 0;
+            color: #333;
+        }
+        .container {
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+        }
+        h2 {
+            font-size: 20px;
+            margin-bottom: 20px;
+            color: #222;
+            display: none;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #18A0FB;
+            box-shadow: 0 0 0 2px rgba(24, 160, 251, 0.2);
+        }
+        .button-group {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 25px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background-color 0.2s, box-shadow 0.2s;
+        }
+        button#convert {
+            background-color: #18A0FB;
+            color: white;
+        }
+        button#convert:hover {
+            background-color: #0E8CD8;
+            box-shadow: 0 2px 8px rgba(24, 160, 251, 0.3);
+        }
+        button#cancel {
+            background-color: #e0e0e0;
+            color: #555;
+        }
+        button#cancel:hover {
+            background-color: #d0d0d0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Hershey Text Converter</h2>
+        <div class="input-group">
+            <label for="fontSize">Font Size (px):</label>
+            <input id="fontSize" type="number" value="24" min="1">
+        </div>
+        <div class="input-group">
+            <label for="lineWidth">Line Width (px):</label>
+            <input id="lineWidth" type="number" value="2" min="0.5" step="0.5">
+        </div>
+        <div class="input-group">
+            <label for="lineHeight">Line Height:</label>
+            <input id="lineHeight" type="number" value="1.2" min="0.01">
+        </div>
+        <div class="input-group">
+            <label for="textStyle">Text Style:</label>
+            <select id="textStyle">
+                <option value="simplex">Simplex</option>
+                <option value="duplex">Duplex</option>
+                <option value="triplex">Triplex</option>
+                <option value="scriptc">Script C</option>
+                <option value="gothiceng">Gothic English</option>
+            </select>
+        </div>
+        <div class="button-group">
+            <button id="convert">Convert</button>
+            <button id="cancel">Cancel</button>
+        </div>
+    </div>
+
+    <script>
+        // Get references to UI elements
+        const fontSizeInput = document.getElementById('fontSize');
+        const lineWidthInput = document.getElementById('lineWidth');
+        const lineHeightInput = document.getElementById('lineHeight');
+        const textStyleSelect = document.getElementById('textStyle');
+        const convertButton = document.getElementById('convert');
+        const cancelButton = document.getElementById('cancel');
+
+        // Event listener for the "Convert" button
+        convertButton.onclick = () => {
+            // Parse input values
+            const fontSize = parseFloat(fontSizeInput.value);
+            const lineWidth = parseFloat(lineWidthInput.value);
+            const lineHeight = parseFloat(lineHeightInput.value);
+            const textStyle = textStyleSelect.value;
+
+            // Send a message to the Figma plugin code with the user's choices
+            parent.postMessage({ pluginMessage: {
+                type: 'convert-text',
+                fontSize,
+                lineWidth,
+                lineHeight,
+                textStyle
+            }}, '*');
+        };
+
+        // Event listener for the "Cancel" button
+        cancelButton.onclick = () => {
+            // Send a message to the Figma plugin code to close the plugin
+            parent.postMessage({ pluginMessage: { type: 'cancel' } }, '*');
+        };
+    </script>
+</body>
+</html>
