@@ -1,8 +1,8 @@
 import os
 import xml.etree.ElementTree as ET
 
-FONTS_DIR = 'fonts'
-OUTPUT_DIR = 'fontsdata'
+FONTS_DIR = '../fonts'
+OUTPUT_DIR = '../fontsdata'
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
