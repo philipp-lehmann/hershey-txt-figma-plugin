@@ -191,6 +191,23 @@
     const convertButton = document.getElementById('convert');
     const closeButton = document.getElementById('close');
 
+
+    // Listen for messages from the plugin code (code.ts)
+    window.onmessage = (event) => {
+      const { type, fontSize, lineHeight, letterSpacing } = event.data.pluginMessage; // Destructure new values
+      if (type === 'set-initial-values') {
+        if (fontSize !== undefined) {
+          fontSizeInput.value = fontSize;
+        }
+        if (lineHeight !== undefined) {
+          lineHeightInput.value = lineHeight;
+        }
+        if (letterSpacing !== undefined) {
+          letterSpacingInput.value = letterSpacing;
+        }
+      }
+    };
+
     // Event listener for the "Convert" button
     convertButton.onclick = () => {
       // Parse input values

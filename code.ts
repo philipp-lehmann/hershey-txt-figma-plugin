@@ -2,6 +2,45 @@
 figma.showUI(__html__);
 figma.ui.resize(400, 480); // Adjusted height slightly to accommodate controls if needed
 
+const selectedNode = figma.currentPage.selection[0];
+let initialFontSize: number = 20; // Default to a number
+let initialLineHeight: number = 28; // Default to a number
+let initialLetterSpacing: number = 0; // Default to a number
+
+if (selectedNode && selectedNode.type === 'TEXT') {
+    // Get initial font size
+    if (typeof selectedNode.fontSize === 'number') {
+        initialFontSize = selectedNode.fontSize;
+    } else if (Array.isArray(selectedNode.fontSize) && selectedNode.fontSize.length > 0) {
+        initialFontSize = selectedNode.fontSize[0];
+    }
+
+    // Get initial line height
+    if (typeof selectedNode.lineHeight === 'number') { // PIXELS
+        initialLineHeight = selectedNode.lineHeight;
+    } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PIXELS') {
+        initialLineHeight = selectedNode.lineHeight.value;
+    } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PERCENT') {
+        initialLineHeight = (selectedNode.lineHeight.value / 100) * initialFontSize;
+    } else if (selectedNode.lineHeight === figma.mixed || (typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'AUTO')) {
+        initialLineHeight = initialFontSize * 1.25;
+    }
+
+    // Get initial letter spacing
+    if (typeof selectedNode.letterSpacing === 'number') { // PIXELS (older API)
+        initialLetterSpacing = selectedNode.letterSpacing;
+    } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PIXELS') {
+        initialLetterSpacing = selectedNode.letterSpacing.value;
+    } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PERCENT') {
+        // Convert percentage letter spacing to pixels based on the determined initialFontSize
+        initialLetterSpacing = (selectedNode.letterSpacing.value / 100) * initialFontSize;
+    }
+    // If it's figma.mixed, it will remain the default (0)
+} 
+
+figma.ui.postMessage({ type: 'set-initial-values', fontSize: initialFontSize, lineHeight: initialLineHeight, letterSpacing: initialLetterSpacing });
+
+
 // Listen for messages from the UI
 figma.ui.onmessage = async (msg) => {
     if (msg.type === 'convert-text') {
@@ -124,6 +163,8 @@ figma.ui.onmessage = async (msg) => {
 
         // Set stroke properties
         vectorNode.strokeWeight = lineWidth;
+        vectorNode.strokeCap = 'SQUARE';
+
         if (Array.isArray(originalFill) && originalFill[0] && originalFill[0].type === 'SOLID') {
             vectorNode.strokes = [{
                 type: 'SOLID',
@@ -136,7 +177,7 @@ figma.ui.onmessage = async (msg) => {
 
         // Position the new vector node relative to the original text node
         vectorNode.x = selectedTextNode.x;
-        vectorNode.y = selectedTextNode.y;
+        vectorNode.y = selectedTextNode.y + selectedTextNode.height + 10;
 
         // Add the new vector node to the current page
         figma.currentPage.appendChild(vectorNode);
