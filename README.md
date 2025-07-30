@@ -3,6 +3,10 @@ This Figma Plugin lets you convert text into path fonts for CNC or Plotter use.
 You can adjust the font size, line height and the letter spacing. 
 More fonts and options are planned.
 
+
+![Screenshot of the Plugin](./docs/screenshot.png)
+
+
 ---
 
 
