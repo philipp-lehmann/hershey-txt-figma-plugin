@@ -1,3 +1,11 @@
+# Figma Hershey Text
+This Figma Plugin lets you convert text into path fonts for CNC or Plotter use.
+You can adjust the font size, line height and the letter spacing. 
+More fonts and options are planned.
+
+---
+
+
 Below are the steps to get your plugin running. You can also find instructions at:
 
   https://www.figma.com/plugin-docs/plugin-quickstart-guide/
