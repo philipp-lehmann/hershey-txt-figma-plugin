@@ -1,4 +1,5 @@
 import os
+import re
 import xml.etree.ElementTree as ET
 
 FONTS_DIR = '../fonts'
@@ -6,51 +7,50 @@ OUTPUT_DIR = '../fontsdata'
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def parse_path(path_data):
+def parse_path(d):
     path = []
-    commands = path_data.split()  # Split path by space to get commands and arguments
-    i = 0
-    while i < len(commands):
-        code = commands[i]  # Command (M, L, C, Z, etc.)
-        i += 1
-        args = []
+    # Split the path into commands and their associated arguments
+    commands = re.findall(r'[MLZmlz][^MLZmlz]*', d)
+    
+    for cmd in commands:
+        code = cmd[0]  # Command (M, L, C, Z, etc.)
+        args = list(map(float, re.findall(r'[-+]?[0-9]*\.?[0-9]+', cmd[1:])))
         
-        # Handle the commands
-        if code.upper() == 'M':  # Move to command
-            path.append(None)
+        # Handle the 'M' (Move to) command
+        if code.upper() == 'M':
+            path.append(None)  # Indicating a move
             for i in range(0, len(args), 2):
-                # Make sure we don't access out of bounds
+                # Ensure that args[i+1] exists
                 if i + 1 < len(args):
-                    path.append([args[i], args[i+1]])
+                    path.append([args[i], args[i + 1]])
                 else:
-                    print(f"Warning: Missing argument for M command. Skipping point: {args[i]}")
-            # Move to the next command after processing 'M'
-            continue  # Skip the rest of the code in the loop, and re-check the next command.
+                    print(f"Warning: Missing argument for 'M' command at index {i}. Skipping.")
 
-        elif code.upper() == 'L':  # Line to command
-            if len(args) % 2 != 0:
-                print(f"Warning: L command has an odd number of arguments. Extra argument ignored. Args: {args}")
-                args = args[:len(args) - 1]  # Remove the last argument if odd number of arguments
-
+        # Handle the 'L' (Line to) command
+        elif code.upper() == 'L':
             for i in range(0, len(args), 2):
-                # Ensure we don't access out of bounds
+                # Ensure that args[i+1] exists
                 if i + 1 < len(args):
-                    path.append([args[i], args[i+1]])
+                    path.append([args[i], args[i + 1]])
                 else:
-                    print(f"Warning: Missing argument for L command. Skipping point: {args[i]}")
+                    print(f"Warning: Missing argument for 'L' command at index {i}. Skipping.")
 
-        elif code.upper() == 'C':  # Cubic Bezier curve (C)
+        # Handle the 'C' (Cubic Bezier curve) command
+        elif code.upper() == 'C':
             for i in range(0, len(args), 6):
-                control1 = [args[i], args[i+1]]
-                control2 = [args[i+2], args[i+3]]
-                endpoint = [args[i+4], args[i+5]]
-                path.append(['C', control1, control2, endpoint])  # Store as cubic curve
+                if i + 5 < len(args):
+                    control1 = [args[i], args[i + 1]]
+                    control2 = [args[i + 2], args[i + 3]]
+                    endpoint = [args[i + 4], args[i + 5]]
+                    path.append(['C', control1, control2, endpoint])  # Store as cubic curve
+                else:
+                    print(f"Warning: Incomplete arguments for 'C' command at index {i}. Skipping.")
 
-        elif code.upper() == 'Z':  # Close path (Z)
-            path.append(None)
+        # Handle the 'Z' (Close path) command
+        elif code.upper() == 'Z':
+            path.append(None)  # Indicating the close path
 
     return path
-
 
 def parse_svg_font(file_path):
     tree = ET.parse(file_path)
@@ -91,7 +91,7 @@ def parse_svg_font(file_path):
 def format_as_ts_object(data, var_name):
     glyphs = data['glyphs']
 
-    lines = [f"export const {var_name}: {{ glyphs: {{ [key: string]: {{ paths: Array<[number, number] | null>, horiz_adv_x: number }} }} }} = {{"]
+    lines = [f"const {var_name}: {{ glyphs: {{ [key: string]: {{ paths: Array<[number, number] | null>, horiz_adv_x: number }} }} }} = {{"]
     lines.append("  glyphs: {")
 
     for char, glyph in glyphs.items():
@@ -114,6 +114,8 @@ def filename_to_varname(filename):
     return ''.join(c if c.isalnum() else '_' for c in base).upper() + '_FONT_DATA'
 
 def process_all_fonts():
+    all_ts_content = []  # List to accumulate all the TS content
+    
     for fname in os.listdir(FONTS_DIR):
         if fname.endswith('.svg'):
             input_path = os.path.join(FONTS_DIR, fname)
@@ -123,10 +125,19 @@ def process_all_fonts():
                 continue
             var_name = filename_to_varname(fname)
             ts_content = format_as_ts_object(font_data, var_name)
-            output_path = os.path.join(OUTPUT_DIR, f'{os.path.splitext(fname)[0]}.ts')
-            with open(output_path, 'w') as f:
-                f.write(ts_content)
-            print(f"Converted: {fname} -> {output_path}")
+            all_ts_content.append(ts_content)  # Accumulate the TS content
+            
+            print(f"Converted: {fname}")
+    
+    # Write all the accumulated content into one single file
+    if all_ts_content:
+        combined_ts_content = "\n\n".join(all_ts_content)  # Join the content with two newlines between each font
+        output_path = os.path.join(OUTPUT_DIR, 'combined_fonts.ts')
+        with open(output_path, 'w') as f:
+            f.write(combined_ts_content)
+        print(f"All fonts converted and saved to {output_path}")
+    else:
+        print("No valid fonts to process.")
 
 if __name__ == '__main__':
     process_all_fonts()
