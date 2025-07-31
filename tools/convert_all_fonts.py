@@ -6,23 +6,51 @@ OUTPUT_DIR = '../fontsdata'
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def parse_path(d):
-    import re
+def parse_path(path_data):
     path = []
-    commands = re.findall(r'[MLZmlz][^MLZmlz]*', d)
-    for cmd in commands:
-        code = cmd[0]
-        args = list(map(float, re.findall(r'[-+]?[0-9]*\.?[0-9]+', cmd[1:])))
-        if code.upper() == 'M':
+    commands = path_data.split()  # Split path by space to get commands and arguments
+    i = 0
+    while i < len(commands):
+        code = commands[i]  # Command (M, L, C, Z, etc.)
+        i += 1
+        args = []
+        
+        # Handle the commands
+        if code.upper() == 'M':  # Move to command
             path.append(None)
             for i in range(0, len(args), 2):
-                path.append([args[i], args[i+1]])
-        elif code.upper() == 'L':
+                # Make sure we don't access out of bounds
+                if i + 1 < len(args):
+                    path.append([args[i], args[i+1]])
+                else:
+                    print(f"Warning: Missing argument for M command. Skipping point: {args[i]}")
+            # Move to the next command after processing 'M'
+            continue  # Skip the rest of the code in the loop, and re-check the next command.
+
+        elif code.upper() == 'L':  # Line to command
+            if len(args) % 2 != 0:
+                print(f"Warning: L command has an odd number of arguments. Extra argument ignored. Args: {args}")
+                args = args[:len(args) - 1]  # Remove the last argument if odd number of arguments
+
             for i in range(0, len(args), 2):
-                path.append([args[i], args[i+1]])
-        elif code.upper() == 'Z':
+                # Ensure we don't access out of bounds
+                if i + 1 < len(args):
+                    path.append([args[i], args[i+1]])
+                else:
+                    print(f"Warning: Missing argument for L command. Skipping point: {args[i]}")
+
+        elif code.upper() == 'C':  # Cubic Bezier curve (C)
+            for i in range(0, len(args), 6):
+                control1 = [args[i], args[i+1]]
+                control2 = [args[i+2], args[i+3]]
+                endpoint = [args[i+4], args[i+5]]
+                path.append(['C', control1, control2, endpoint])  # Store as cubic curve
+
+        elif code.upper() == 'Z':  # Close path (Z)
             path.append(None)
+
     return path
+
 
 def parse_svg_font(file_path):
     tree = ET.parse(file_path)

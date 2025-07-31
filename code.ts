@@ -2,44 +2,79 @@
 figma.showUI(__html__);
 figma.ui.resize(400, 480); // Adjusted height slightly to accommodate controls if needed
 
-const selectedNode = figma.currentPage.selection[0];
-let initialFontSize: number = 20; // Default to a number
-let initialLineHeight: number = 28; // Default to a number
-let initialLetterSpacing: number = 0; // Default to a number
+// Helper function to get initial text properties
+function getInitialTextProperties() {
+    const selectedNode = figma.currentPage.selection[0];
+    let initialFontSize: number = 50; // Default
+    let initialLineHeight: number = 28; // Default
+    let initialLetterSpacing: number = 0; // Default
 
-if (selectedNode && selectedNode.type === 'TEXT') {
-    // Get initial font size
-    if (typeof selectedNode.fontSize === 'number') {
-        initialFontSize = selectedNode.fontSize;
-    } else if (Array.isArray(selectedNode.fontSize) && selectedNode.fontSize.length > 0) {
-        initialFontSize = selectedNode.fontSize[0];
+    if (selectedNode && selectedNode.type === 'TEXT') {
+        // Get initial font size
+        if (typeof selectedNode.fontSize === 'number') {
+            initialFontSize = selectedNode.fontSize;
+        } else if (Array.isArray(selectedNode.fontSize) && selectedNode.fontSize.length > 0) {
+            initialFontSize = selectedNode.fontSize[0];
+        }
+
+        // Get initial line height
+        if (typeof selectedNode.lineHeight === 'number') { // PIXELS
+            initialLineHeight = selectedNode.lineHeight;
+        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PIXELS') {
+            initialLineHeight = selectedNode.lineHeight.value;
+        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PERCENT') {
+            initialLineHeight = (selectedNode.lineHeight.value / 100) * initialFontSize;
+        } else if (selectedNode.lineHeight === figma.mixed || (typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'AUTO')) {
+            // Guesstimate auto line height as 150% of font size
+            initialLineHeight = initialFontSize * 1.5;
+        }
+
+        // Get initial letter spacing
+        if (typeof selectedNode.letterSpacing === 'number') { // PIXELS (older API)
+            initialLetterSpacing = selectedNode.letterSpacing;
+        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PIXELS') {
+            initialLetterSpacing = selectedNode.letterSpacing.value;
+        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PERCENT') {
+            initialLetterSpacing = selectedNode.letterSpacing.value;
+        }
     }
 
-    // Get initial line height
-    if (typeof selectedNode.lineHeight === 'number') { // PIXELS
-        initialLineHeight = selectedNode.lineHeight;
-    } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PIXELS') {
-        initialLineHeight = selectedNode.lineHeight.value;
-    } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PERCENT') {
-        initialLineHeight = (selectedNode.lineHeight.value / 100) * initialFontSize;
-    } else if (selectedNode.lineHeight === figma.mixed || (typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'AUTO')) {
-        initialLineHeight = initialFontSize * 1.25;
+    return { initialFontSize, initialLineHeight, initialLetterSpacing };
+}
+
+// Initial load: Get properties and send to UI
+const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
+figma.ui.postMessage({
+    type: 'set-initial-values',
+    fontSize: initialFontSize,
+    lineHeight: initialLineHeight,
+    letterSpacing: initialLetterSpacing
+});
+
+// Listen for selection changes
+figma.on('selectionchange', () => {
+    const newSelection = figma.currentPage.selection;
+    if (newSelection.length === 1 && newSelection[0].type === 'TEXT') {
+        // If a single text node is selected, update UI with its properties
+        const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
+        figma.ui.postMessage({
+            type: 'set-initial-values',
+            fontSize: initialFontSize,
+            lineHeight: initialLineHeight,
+            letterSpacing: initialLetterSpacing
+        });
+        figma.notify('Updated values from selected text layer.', { timeout: 1000 });
+    } else {
+        // If no text node or multiple nodes are selected, revert to defaults and notify
+        figma.ui.postMessage({
+            type: 'set-initial-values',
+            fontSize: 50, // Default font size
+            lineHeight: 28, // Default line height
+            letterSpacing: 0 // Default letter spacing
+        });
+        figma.notify('No single text layer selected. Reverted to default values.', { timeout: 1000 });
     }
-
-    // Get initial letter spacing
-    if (typeof selectedNode.letterSpacing === 'number') { // PIXELS (older API)
-        initialLetterSpacing = selectedNode.letterSpacing;
-    } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PIXELS') {
-        initialLetterSpacing = selectedNode.letterSpacing.value;
-    } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PERCENT') {
-        // Convert percentage letter spacing to pixels based on the determined initialFontSize
-        initialLetterSpacing = (selectedNode.letterSpacing.value / 100) * initialFontSize;
-    }
-    // If it's figma.mixed, it will remain the default (0)
-} 
-
-figma.ui.postMessage({ type: 'set-initial-values', fontSize: initialFontSize, lineHeight: initialLineHeight, letterSpacing: initialLetterSpacing });
-
+});
 
 // Listen for messages from the UI
 figma.ui.onmessage = async (msg) => {
