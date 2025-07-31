@@ -7,6 +7,13 @@ More fonts and options are planned.
 ![Screenshot of the Plugin](./docs/screenshot.png)
 
 
+## Workflow
+Convert all fonts in `/fonts` to data objects with the script in `/tools`. 
+Run the script with `python convert_all_fonts.py `
+This creates a new file in `/fontsdata/combined_fonts.ts`. Copy the content to `code.ts`.
+Build the plugin with `npm run watch` or `npm run build`.
+
+
 ---
 
 
