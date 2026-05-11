@@ -165,7 +165,9 @@ function convertTextNodeToVector(
     textStyle: string,
     replaceOriginal: boolean
 ): VectorNode {
-    const lines = textNode.characters.split('\n');
+    // Figma represents paragraph breaks with \u2029 and soft line breaks with
+    // \u2028 in textNode.characters; handle \r and \n too just in case.
+    const lines = textNode.characters.split(/\r\n|[\r\n\u2028\u2029]/);
     const originalFill = textNode.fills;
     const originalParent = textNode.parent;
     const originalIndex = originalParent ? originalParent.children.indexOf(textNode) : -1;
