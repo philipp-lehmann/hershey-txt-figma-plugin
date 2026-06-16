@@ -86,6 +86,16 @@
       box-shadow: 0 2px 8px rgba(24, 160, 251, 0.3);
     }
 
+    button#insert {
+      background-color: #6c757d;
+      color: white;
+    }
+
+    button#insert:hover {
+      background-color: #5a6268;
+      box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+    }
+
     button#close {
       background-color: #e0e0e0;
       color: #555;
@@ -136,6 +146,16 @@
         box-shadow: 0 2px 8px rgba(24, 160, 251, 0.4);
       }
 
+      button#insert {
+        background-color: #6c757d;
+        color: white;
+      }
+
+      button#insert:hover {
+        background-color: #7d858d;
+        box-shadow: 0 2px 8px rgba(108, 117, 125, 0.4);
+      }
+
       button#close {
         background-color: #555555;
         color: #e0e0e0;
@@ -181,6 +201,7 @@
     </div>
     <div class="button-group">
       <button id="convert">Convert</button>
+      <button id="insert">Insert</button>
       <button id="close">Close</button>
     </div>
   </div>
@@ -193,43 +214,67 @@
     const letterSpacingInput = document.getElementById('letterSpacing');
     const textStyleSelect = document.getElementById('textStyle');
     const convertButton = document.getElementById('convert');
+    const insertButton = document.getElementById('insert');
     const closeButton = document.getElementById('close');
 
 
+    const AUTO_PLACEHOLDER = 'auto (per layer)';
+
+    // Helper to set input value or placeholder for mixed values
+    function setInputValue(input, value) {
+      if (value === null) {
+        input.value = '';
+        input.placeholder = AUTO_PLACEHOLDER;
+      } else if (value !== undefined) {
+        input.value = value;
+        input.placeholder = '';
+      }
+    }
+
     // Listen for messages from the plugin code (code.ts)
     window.onmessage = (event) => {
-      const { type, fontSize, lineHeight, letterSpacing } = event.data.pluginMessage; // Destructure new values
+      const { type, fontSize, lineHeight, letterSpacing, lineWidth } = event.data.pluginMessage;
       if (type === 'set-initial-values') {
-        if (fontSize !== undefined) {
-          fontSizeInput.value = fontSize;
-        }
-        if (lineHeight !== undefined) {
-          lineHeightInput.value = lineHeight;
-        }
-        if (letterSpacing !== undefined) {
-          letterSpacingInput.value = letterSpacing;
-        }
+        setInputValue(fontSizeInput, fontSize);
+        setInputValue(lineHeightInput, lineHeight);
+        setInputValue(letterSpacingInput, letterSpacing);
+        setInputValue(lineWidthInput, lineWidth);
       }
     };
 
-    // Event listener for the "Convert" button
-    convertButton.onclick = () => {
-      // Parse input values
-      const fontSize = parseFloat(fontSizeInput.value);
-      const lineWidth = parseFloat(lineWidthInput.value);
-      const lineHeight = parseFloat(lineHeightInput.value);
-      const letterSpacing = parseFloat(letterSpacingInput.value);
+    // Helper to get values (null means use per-layer auto value)
+    function getValues() {
+      const fontSizeVal = fontSizeInput.value.trim();
+      const lineWidthVal = lineWidthInput.value.trim();
+      const lineHeightVal = lineHeightInput.value.trim();
+      const letterSpacingVal = letterSpacingInput.value.trim();
       const textStyle = textStyleSelect.value;
 
-      // Send a message to the Figma plugin code with the user's choices
+      return {
+        fontSize: fontSizeVal === '' ? null : parseFloat(fontSizeVal),
+        lineWidth: lineWidthVal === '' ? null : parseFloat(lineWidthVal),
+        lineHeight: lineHeightVal === '' ? null : parseFloat(lineHeightVal),
+        letterSpacing: letterSpacingVal === '' ? null : parseFloat(letterSpacingVal),
+        textStyle
+      };
+    }
+
+    // Event listener for the "Convert" button
+    convertButton.onclick = () => {
       parent.postMessage({
         pluginMessage: {
           type: 'convert-text',
-          fontSize,
-          lineWidth,
-          lineHeight,
-          letterSpacing,
-          textStyle
+          ...getValues()
+        }
+      }, '*');
+    };
+
+    // Event listener for the "Insert" button
+    insertButton.onclick = () => {
+      parent.postMessage({
+        pluginMessage: {
+          type: 'insert-text',
+          ...getValues()
         }
       }, '*');
     };

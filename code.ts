@@ -2,245 +2,328 @@
 figma.showUI(__html__);
 figma.ui.resize(400, 480); // Adjusted height slightly to accommodate controls if needed
 
-// Helper function to get initial text properties
-function getInitialTextProperties() {
-    const selectedNode = figma.currentPage.selection[0];
-    let initialFontSize: number = 50; // Default
-    let initialLineHeight: number = 28; // Default
-    let initialLetterSpacing: number = 0; // Default
-
-    if (selectedNode && selectedNode.type === 'TEXT') {
-        // Get initial font size
-        if (typeof selectedNode.fontSize === 'number') {
-            initialFontSize = selectedNode.fontSize;
-        } else if (Array.isArray(selectedNode.fontSize) && selectedNode.fontSize.length > 0) {
-            initialFontSize = selectedNode.fontSize[0];
+// Helper function to recursively find all text nodes within a node
+function findTextNodes(node: SceneNode): TextNode[] {
+    if (node.type === 'TEXT') {
+        return [node];
+    }
+    if ('children' in node) {
+        const textNodes: TextNode[] = [];
+        for (const child of node.children) {
+            textNodes.push(...findTextNodes(child));
         }
+        return textNodes;
+    }
+    return [];
+}
 
-        // Get initial line height
-        if (typeof selectedNode.lineHeight === 'number') { // PIXELS
-            initialLineHeight = selectedNode.lineHeight;
-        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PIXELS') {
-            initialLineHeight = selectedNode.lineHeight.value;
-        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PERCENT') {
-            initialLineHeight = (selectedNode.lineHeight.value / 100) * initialFontSize;
-        } else if (selectedNode.lineHeight === figma.mixed || (typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'AUTO')) {
-            // Guesstimate auto line height as 150% of font size
-            initialLineHeight = initialFontSize * 1.5;
-        }
+// Helper function to get all text nodes from selection (including nested)
+function getTextNodesFromSelection(): TextNode[] {
+    const textNodes: TextNode[] = [];
+    for (const node of figma.currentPage.selection) {
+        textNodes.push(...findTextNodes(node));
+    }
+    return textNodes;
+}
 
-        // Get initial letter spacing
-        if (typeof selectedNode.letterSpacing === 'number') { // PIXELS (older API)
-            initialLetterSpacing = selectedNode.letterSpacing;
-        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PIXELS') {
-            initialLetterSpacing = selectedNode.letterSpacing.value;
-        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PERCENT') {
-            initialLetterSpacing = selectedNode.letterSpacing.value;
-        }
+// Helper function to get properties from a single text node
+function getTextNodeProperties(node: TextNode) {
+    let fontSize: number = 50;
+    let lineHeight: number = 28;
+    let letterSpacing: number = 0;
+
+    // Get font size
+    if (typeof node.fontSize === 'number') {
+        fontSize = node.fontSize;
     }
 
-    return { initialFontSize, initialLineHeight, initialLetterSpacing };
+    // Get line height
+    if (typeof node.lineHeight === 'number') {
+        lineHeight = node.lineHeight;
+    } else if (node.lineHeight && typeof node.lineHeight === 'object' && node.lineHeight.unit === 'PIXELS') {
+        lineHeight = node.lineHeight.value;
+    } else if (node.lineHeight && typeof node.lineHeight === 'object' && node.lineHeight.unit === 'PERCENT') {
+        lineHeight = (node.lineHeight.value / 100) * fontSize;
+    } else if (node.lineHeight === figma.mixed || (typeof node.lineHeight === 'object' && node.lineHeight.unit === 'AUTO')) {
+        lineHeight = fontSize * 1.5;
+    }
+
+    // Get letter spacing
+    if (typeof node.letterSpacing === 'number') {
+        letterSpacing = node.letterSpacing;
+    } else if (node.letterSpacing && typeof node.letterSpacing === 'object' && node.letterSpacing.unit === 'PIXELS') {
+        letterSpacing = node.letterSpacing.value;
+    } else if (node.letterSpacing && typeof node.letterSpacing === 'object' && node.letterSpacing.unit === 'PERCENT') {
+        letterSpacing = node.letterSpacing.value;
+    }
+
+    // Calculate line width as a proportion of font size (fontSize / 12, rounded, max 2px)
+    const lineWidth = Math.min(2, Math.max(1, Math.round(fontSize / 12)));
+
+    return { fontSize, lineHeight, letterSpacing, lineWidth };
+}
+
+// Helper function to get initial text properties from selection
+function getInitialTextProperties() {
+    const textNodes = getTextNodesFromSelection();
+
+    if (textNodes.length === 0) {
+        return {
+            initialFontSize: 50,
+            initialLineHeight: 28,
+            initialLetterSpacing: 0,
+            initialLineWidth: 2
+        };
+    }
+
+    // Get properties from first text node
+    const firstProps = getTextNodeProperties(textNodes[0]);
+    let fontSizeMatch = true;
+    let lineHeightMatch = true;
+    let letterSpacingMatch = true;
+    let lineWidthMatch = true;
+
+    // Check if all text nodes have matching properties
+    for (let i = 1; i < textNodes.length; i++) {
+        const props = getTextNodeProperties(textNodes[i]);
+        if (props.fontSize !== firstProps.fontSize) fontSizeMatch = false;
+        if (props.lineHeight !== firstProps.lineHeight) lineHeightMatch = false;
+        if (props.letterSpacing !== firstProps.letterSpacing) letterSpacingMatch = false;
+        if (props.lineWidth !== firstProps.lineWidth) lineWidthMatch = false;
+    }
+
+    return {
+        initialFontSize: fontSizeMatch ? firstProps.fontSize : null,
+        initialLineHeight: lineHeightMatch ? firstProps.lineHeight : null,
+        initialLetterSpacing: letterSpacingMatch ? firstProps.letterSpacing : null,
+        initialLineWidth: lineWidthMatch ? firstProps.lineWidth : null
+    };
 }
 
 // Initial load: Get properties and send to UI
-const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
+const { initialFontSize, initialLineHeight, initialLetterSpacing, initialLineWidth } = getInitialTextProperties();
 figma.ui.postMessage({
     type: 'set-initial-values',
     fontSize: initialFontSize,
     lineHeight: initialLineHeight,
-    letterSpacing: initialLetterSpacing
+    letterSpacing: initialLetterSpacing,
+    lineWidth: initialLineWidth
 });
 
 // Listen for selection changes
 figma.on('selectionchange', () => {
-    const newSelection = figma.currentPage.selection;
-    if (newSelection.length === 1 && newSelection[0].type === 'TEXT') {
-        // If a single text node is selected, update UI with its properties
-        const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
+    const textNodes = getTextNodesFromSelection();
+
+    if (textNodes.length > 0) {
+        const { initialFontSize, initialLineHeight, initialLetterSpacing, initialLineWidth } = getInitialTextProperties();
         figma.ui.postMessage({
             type: 'set-initial-values',
             fontSize: initialFontSize,
             lineHeight: initialLineHeight,
-            letterSpacing: initialLetterSpacing
+            letterSpacing: initialLetterSpacing,
+            lineWidth: initialLineWidth
         });
-        figma.notify('Updated values from selected text layer.', { timeout: 1000 });
+        const layerText = textNodes.length === 1 ? 'layer' : 'layers';
+        figma.notify(`Updated values from ${textNodes.length} text ${layerText}.`, { timeout: 1000 });
     } else {
-        // If no text node or multiple nodes are selected, revert to defaults and notify
         figma.ui.postMessage({
             type: 'set-initial-values',
-            fontSize: 50, // Default font size
-            lineHeight: 28, // Default line height
-            letterSpacing: 0 // Default letter spacing
+            fontSize: 50,
+            lineHeight: 28,
+            letterSpacing: 0,
+            lineWidth: 2
         });
-        figma.notify('No single text layer selected. Reverted to default values.', { timeout: 1000 });
+        figma.notify('No text layers selected. Reverted to default values.', { timeout: 1000 });
     }
 });
 
+// Helper function to get font data by style name
+function getFontData(textStyle: string) {
+    switch (textStyle) {
+        case "EMS Readability Italic":
+            return EMSREADABILITYITALIC_FONT_DATA;
+        case "Hershey Script":
+            return HERSHEYSCRIPT1_FONT_DATA;
+        case "Hershey Script Medium":
+            return HERSHEYSCRIPTMED_FONT_DATA;
+        case "Hershey Serif Bold":
+            return HERSHEYSERIFBOLD_FONT_DATA;
+        case "Hershey Serif Medium":
+            return HERSHEYSERIFMED_FONT_DATA;
+        default:
+            return EMSREADABILITY_FONT_DATA;
+    }
+}
+
+// Helper function to convert a single text node to vector
+function convertTextNodeToVector(
+    textNode: TextNode,
+    fontSize: number,
+    lineWidth: number,
+    lineHeight: number,
+    letterSpacing: number,
+    textStyle: string,
+    replaceOriginal: boolean
+): VectorNode {
+    // Figma represents paragraph breaks with \u2029 and soft line breaks with
+    // \u2028 in textNode.characters; handle \r and \n too just in case.
+    const lines = textNode.characters.split(/\r\n|[\r\n\u2028\u2029]/);
+    const originalFill = textNode.fills;
+    const originalParent = textNode.parent;
+    const originalIndex = originalParent ? originalParent.children.indexOf(textNode) : -1;
+    const originalCenterX = textNode.x + textNode.width / 2;
+    const originalCenterY = textNode.y + textNode.height / 2;
+
+    const unitsPerEm = 1000;
+    const fontAscent = 800;
+    const selectedFontData = getFontData(textStyle);
+
+    const scale = fontSize / unitsPerEm;
+    const characterSpacing = letterSpacing * scale * 10;
+    const lineHeightSpacing = lineHeight;
+
+    const allVectorPaths: VectorPath[] = [];
+    let currentYOffset = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+        const lineContent = lines[i];
+        let currentXOffset = 0;
+
+        for (const char of lineContent) {
+            const charEntry = selectedFontData.glyphs[char] || { paths: [], horiz_adv_x: 0 };
+            const charData = charEntry.paths;
+            const horizAdvX = charEntry.horiz_adv_x;
+
+            if (charData.length === 0) {
+                if (char === ' ') {
+                    currentXOffset += 350 * scale + characterSpacing;
+                } else {
+                    console.warn(`Font data not found for character: ${char}. Skipping.`);
+                    currentXOffset += 350 * scale + characterSpacing;
+                }
+                continue;
+            }
+
+            let pathData = "";
+            let penDown = false;
+
+            for (const segment of charData) {
+                if (segment === null) {
+                    penDown = false;
+                } else {
+                    const [x, y] = segment;
+                    const transformedX = x * scale + currentXOffset;
+                    const transformedY = (fontAscent - y) * scale + currentYOffset;
+
+                    if (!penDown) {
+                        pathData += `M ${transformedX} ${transformedY} `;
+                        penDown = true;
+                    } else {
+                        pathData += `L ${transformedX} ${transformedY} `;
+                    }
+                }
+            }
+
+            if (pathData) {
+                allVectorPaths.push({
+                    windingRule: 'NONZERO',
+                    data: pathData.trim()
+                });
+            }
+
+            const charWidth = horizAdvX * scale;
+            currentXOffset += charWidth + characterSpacing;
+        }
+
+        currentYOffset += lineHeightSpacing;
+    }
+
+    const vectorNode = figma.createVector();
+    vectorNode.name = `${textNode.name}`;
+    vectorNode.vectorPaths = allVectorPaths;
+
+    vectorNode.strokeWeight = lineWidth;
+    vectorNode.strokeCap = 'SQUARE';
+
+    if (Array.isArray(originalFill) && originalFill[0] && originalFill[0].type === 'SOLID') {
+        vectorNode.strokes = [{
+            type: 'SOLID',
+            color: originalFill[0].color,
+            opacity: originalFill[0].opacity || 1,
+        }];
+    } else {
+        vectorNode.strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
+    }
+
+    // Insert the vector node into the document
+    if (replaceOriginal) {
+        if (originalParent && originalIndex !== -1) {
+            originalParent.insertChild(originalIndex, vectorNode);
+        } else {
+            figma.currentPage.appendChild(vectorNode);
+        }
+        textNode.remove();
+    } else {
+        if (originalParent && originalIndex !== -1) {
+            originalParent.insertChild(originalIndex + 1, vectorNode);
+        } else {
+            figma.currentPage.appendChild(vectorNode);
+        }
+    }
+
+    // Position the new vector node so its center aligns with the original text center
+    vectorNode.x = originalCenterX - vectorNode.width / 2;
+    vectorNode.y = originalCenterY - vectorNode.height / 2;
+
+    return vectorNode;
+}
+
 // Listen for messages from the UI
 figma.ui.onmessage = async (msg) => {
-    if (msg.type === 'convert-text') {
+    if (msg.type === 'convert-text' || msg.type === 'insert-text') {
         const { fontSize, lineWidth, lineHeight, letterSpacing, textStyle } = msg;
+        const replaceOriginal = msg.type === 'convert-text';
 
-        // Ensure only one text node is selected
-        if (figma.currentPage.selection.length !== 1 || figma.currentPage.selection[0].type !== 'TEXT') {
-            figma.notify('Please select exactly one text layer to convert.', { timeout: 3000 });
-            figma.ui.postMessage({ type: 'close' }); // Close UI if selection is invalid
+        // Get all text nodes from selection (including nested in groups/frames)
+        const textNodes = getTextNodesFromSelection();
+
+        if (textNodes.length === 0) {
+            figma.notify('No text layers found in selection.', { timeout: 3000 });
+            figma.ui.postMessage({ type: 'close' });
             return;
         }
 
-        const selectedTextNode = figma.currentPage.selection[0] as TextNode;
-        const lines = selectedTextNode.characters.split('\n');
-        const originalFill = selectedTextNode.fills; // Get original fill color for stroke
+        const createdVectors: VectorNode[] = [];
 
-        // Font metrics from EMS Readability SVG font (units-per-em and ascent)
-        const unitsPerEm = 1000;
-        const fontAscent = 800; // Ascent value from your font-face metadata
+        // Process each text node
+        for (const textNode of textNodes) {
+            // Get per-layer values for any null (auto) settings
+            const layerProps = getTextNodeProperties(textNode);
+            const effectiveFontSize = fontSize ?? layerProps.fontSize;
+            const effectiveLineWidth = lineWidth ?? layerProps.lineWidth;
+            const effectiveLineHeight = lineHeight ?? layerProps.lineHeight;
+            const effectiveLetterSpacing = letterSpacing ?? layerProps.letterSpacing;
 
-        let selectedFontData: {
-            glyphs: {
-                [key: string]: {
-                paths: Array<[number, number] | null>,
-                horiz_adv_x: number
-                }
-            }
-        };
-        // EMSREADABILITY_FONT_DATA
-        // EMSREADABILITYITALIC_FONT_DATA
-        // HERSHEYSCRIPT1_FONT_DATA
-        // HERSHEYSCRIPTMED_FONT_DATA
-        // HERSHEYSERIFBOLD_FONT_DATA
-        // HERSHEYSERIFMED_FONT_DATA
-        console.log(textStyle)
-        switch (textStyle) {
-            case "EMS Readability Italic":
-                selectedFontData = EMSREADABILITYITALIC_FONT_DATA;
-                break;
-            case "Hershey Script":
-                selectedFontData = HERSHEYSCRIPT1_FONT_DATA;
-                break;
-            case "Hershey Script Medium":
-                selectedFontData = HERSHEYSCRIPTMED_FONT_DATA;
-                break;
-            case "Hershey Serif Bold":
-                selectedFontData = HERSHEYSERIFBOLD_FONT_DATA;
-                break;
-            case "Hershey Serif Medium":
-                selectedFontData = HERSHEYSERIFMED_FONT_DATA;
-                break;
-
-            default:
-                selectedFontData = EMSREADABILITY_FONT_DATA;
-                break;
+            const vectorNode = convertTextNodeToVector(
+                textNode,
+                effectiveFontSize,
+                effectiveLineWidth,
+                effectiveLineHeight,
+                effectiveLetterSpacing,
+                textStyle,
+                replaceOriginal
+            );
+            createdVectors.push(vectorNode);
         }
 
-        console.log(textStyle);
+        // Select all newly created vector nodes
+        figma.currentPage.selection = createdVectors;
 
-        // Calculate scaling factor based on desired font size and units-per-em
-        const scale = fontSize / unitsPerEm;
-        const characterSpacing = letterSpacing * scale * 10; // Add some spacing between characters
-        const lineHeightSpacing = lineHeight; // Use the provided lineHeight directly for spacing (assuming it's in pixels)
-
-        const allVectorPaths: VectorPath[] = [];
-        let currentYOffset = 0; // Vertical offset for each line
-
-        // Process each line of text
-        for (let i = 0; i < lines.length; i++) {
-            const lineContent = lines[i];
-            let currentXOffset = 0; // Horizontal offset for characters within the current line
-
-            // Generate paths for each character in the current line
-            for (const char of lineContent) {
-                const charEntry = selectedFontData.glyphs[char] || { paths: [], horiz_adv_x: 0 }; // Get data for the character, or empty if not found
-                const charData = charEntry.paths;
-                const horizAdvX = charEntry.horiz_adv_x;
-
-                if (charData.length === 0) {
-                    if (char === ' ') {
-                        // Add a default gap for space characters
-                        currentXOffset += 350 * scale + characterSpacing; // Adjust this value as needed for the space width
-                    } else {
-                        // If character data is missing and it's not a space, notify and skip
-                        console.warn(`EMS Readability data not found for character: ${char}. Skipping.`);
-                        currentXOffset += 350 * scale + characterSpacing; // Advance X for missing char, using a default width
-                    }
-                    continue;
-                }
-
-                let pathData = "";
-                let penDown = false;
-                let charMinX = Infinity;
-                let charMaxX = -Infinity;
-
-                // Convert font coordinates to SVG path commands
-                for (const segment of charData) {
-                    if (segment === null) {
-                        penDown = false; // Pen up, start new subpath
-                    } else {
-                        const [x, y] = segment;
-                        charMinX = Math.min(charMinX, x);
-                        charMaxX = Math.max(charMaxX, x);
-
-                        const transformedX = x * scale + currentXOffset;
-                        const transformedY = (fontAscent - y) * scale + currentYOffset;
-
-                        if (!penDown) {
-                            pathData += `M ${transformedX} ${transformedY} `;
-                            penDown = true;
-                        } else {
-                            pathData += `L ${transformedX} ${transformedY} `;
-                        }
-                    }
-                }
-
-                if (pathData) {
-                    allVectorPaths.push({
-                        windingRule: 'NONZERO',
-                        data: pathData.trim()
-                    });
-                }
-
-                // Advance X offset for the next character using the character's horiz_adv_x
-                const charWidth = horizAdvX * scale; // Apply scale to horiz_adv_x
-                currentXOffset += charWidth + characterSpacing; // Advance by char's width and letter spacing
-            }
-
-            // After processing a line, advance the Y offset for the next line
-            currentYOffset += lineHeightSpacing;
-        }
-
-        // Create a new VectorNode
-        const vectorNode = figma.createVector();
-        vectorNode.name = `${selectedTextNode.name}`;
-        vectorNode.vectorPaths = allVectorPaths;
-
-        // Set stroke properties
-        vectorNode.strokeWeight = lineWidth;
-        vectorNode.strokeCap = 'SQUARE';
-
-        if (Array.isArray(originalFill) && originalFill[0] && originalFill[0].type === 'SOLID') {
-            vectorNode.strokes = [{
-                type: 'SOLID',
-                color: originalFill[0].color,
-                opacity: originalFill[0].opacity || 1,
-            }];
-        } else {
-            vectorNode.strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
-        }
-
-        // Position the new vector node relative to the original text node
-        vectorNode.x = selectedTextNode.x;
-        vectorNode.y = selectedTextNode.y + selectedTextNode.height + 10;
-
-        // Add the new vector node to the current page
-        figma.currentPage.appendChild(vectorNode);
-
-        // Select the newly created vector node
-        figma.currentPage.selection = [vectorNode];
-
-        // Zoom to fit the new node (optional)
-        figma.viewport.scrollAndZoomIntoView([vectorNode]);
-
-        figma.notify('Text converted to EMS Readability vector paths!', { timeout: 2000 });
+        const layerText = textNodes.length === 1 ? 'layer' : 'layers';
+        const notifyMessage = replaceOriginal
+            ? `${textNodes.length} text ${layerText} converted to vector paths!`
+            : `Vector paths inserted for ${textNodes.length} text ${layerText}!`;
+        figma.notify(notifyMessage, { timeout: 2000 });
         figma.ui.postMessage({ type: 'close' }); // Close the UI after conversion
 
     } else if (msg.type === 'cancel') {
