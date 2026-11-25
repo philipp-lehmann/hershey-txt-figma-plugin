@@ -17,7 +17,6 @@ import math
 import numpy as np
 from fontTools.pens.basePen import BasePen
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageDraw
 from scipy import ndimage
 from skimage.morphology import skeletonize
 
@@ -76,14 +75,29 @@ def rasterise(contours):
     def to_px(p):  # font units (y up) -> pixels (y down)
         return ((p[0] - x0) * RES + PAD, h - ((p[1] - y0) * RES + PAD))
 
-    # nonzero fill: add each contour with the sign of its direction, so
-    # overlapping contours (common in variable fonts) stay filled
-    winding = np.zeros((h, w), np.int16)
+    # Nonzero-winding scanline fill. Variable fonts often have overlapping
+    # and self-intersecting contours (corners, crossings); these must stay
+    # filled, which PIL's polygon fill (even-odd) does not do.
+    x_a, y_a, x_b, y_b = [], [], [], []
     for c in contours:
-        area = sum(x0_ * y1_ - x1_ * y0_ for (x0_, y0_), (x1_, y1_) in zip(c, c[1:] + c[:1]))
-        m = Image.new('L', (w, h), 0)
-        ImageDraw.Draw(m).polygon([to_px(p) for p in c], fill=1)
-        winding += np.asarray(m, np.int16) * (1 if area > 0 else -1)
+        pts = [to_px(p) for p in c]
+        for (xa, ya), (xb, yb) in zip(pts, pts[1:] + pts[:1]):
+            if ya != yb:
+                x_a.append(xa); y_a.append(ya); x_b.append(xb); y_b.append(yb)
+    x_a, y_a, x_b, y_b = map(np.array, (x_a, y_a, x_b, y_b))
+
+    diff = np.zeros((h, w + 1), np.int32)
+    lo, hi = np.minimum(y_a, y_b), np.maximum(y_a, y_b)
+    direction = np.where(y_b > y_a, 1, -1)
+    for i in range(len(x_a)):
+        rows = np.arange(max(int(np.ceil(lo[i] - 0.5)), 0), min(int(np.ceil(hi[i] - 0.5)), h))
+        if len(rows) == 0:
+            continue
+        yc = rows + 0.5  # pixel centres
+        xc = x_a[i] + (yc - y_a[i]) * (x_b[i] - x_a[i]) / (y_b[i] - y_a[i])
+        cols = np.clip(np.ceil(xc - 0.5).astype(int), 0, w)
+        np.add.at(diff, (rows, cols), direction[i])
+    winding = np.cumsum(diff[:, :w], axis=1)
 
     def to_units(r, c):
         return ((c - PAD) / RES + x0, (h - r - PAD) / RES + y0)
@@ -188,7 +202,7 @@ def degrees(E):
     return d
 
 
-def prune_spurs(E, width_at, factor=1.2):
+def prune_spurs(E, width_at, stroke_width, factor=1.2):
     """
     Remove short dangling branches created by corners and terminals.
     All spurs at a node are removed in the same pass, so the two corner
@@ -201,8 +215,13 @@ def prune_spurs(E, width_at, factor=1.2):
         for e in E:
             if e['a'] == e['b']:
                 continue
-            for end, other, anchor in (('a', 'b', -1), ('b', 'a', 0)):
-                if d[e[end]] == 1 and d[e[other]] >= 3 and len(e['pts']) < factor * width_at(e['pts'][anchor]):
+            for end, other, tip, anchor in (('a', 'b', 0, -1), ('b', 'a', -1, 0)):
+                base = width_at(e['pts'][anchor])
+                # corner artefacts run out into a sharp outline corner (thickness
+                # drops towards zero); real short strokes (the crossbar of t, the
+                # foot of u) end with full thickness and are kept
+                if (d[e[end]] == 1 and d[e[other]] >= 3 and len(e['pts']) < factor * base
+                        and width_at(e['pts'][tip]) < 0.5 * stroke_width):
                     spurs.append(e)
                     break
         if not spurs:
@@ -511,8 +530,21 @@ def glyph_strokes(contours, eps_units=2.0):
 
     edges, node_id = trace_edges(sk)
     E = build_graph(edges, node_id)
-    E = prune_spurs(E, width_at)
-    covered = {labels[e['pts'][0]] for e in E}
+    E = prune_spurs(E, width_at, 2 * float(np.median(dist[sk])))
+
+    # dots (i, j, umlauts, period...) are drawn as small circles: a part that
+    # is about as long as it is wide has no meaningful centreline
+    dots = []
+    for lab, sl in enumerate(ndimage.find_objects(labels), start=1):
+        part = labels[sl] == lab
+        thickness = dist[sl][part].max()
+        if max(part.shape) < 3 * thickness:
+            rr, cc = np.nonzero(part)
+            dots.append((rr.mean() + sl[0].start, cc.mean() + sl[1].start, thickness))
+    dot_labels = {labels[int(round(r)), int(round(c))] for r, c, _ in dots}
+    E = [e for e in E if labels[e['pts'][0]] not in dot_labels]
+    covered = {labels[e['pts'][0]] for e in E} | dot_labels
+
     E = contract_junctions(E, dist, node_id)
     E = fix_ends(E, dist, node_id, mask)
     E = merge_chains(E)
@@ -525,16 +557,18 @@ def glyph_strokes(contours, eps_units=2.0):
         arr = rdp(arr, eps_units * RES)
         strokes.append([to_units(r, c) for c, r in arr])
 
-    # tiny blobs (dots of i, j, period...) whose skeleton is a point
+    def circle(cy, cx, rad):
+        return [to_units(cy + rad * math.sin(t), cx + rad * math.cos(t))
+                for t in np.linspace(0, 2 * math.pi, 13)]
+
+    for cy, cx, thickness in dots:
+        strokes.append(circle(cy, cx, max(0.5 * thickness, 2)))
+
+    # any other part without a skeleton (very small specks)
     for lab in range(1, nlab + 1):
-        if lab in covered:
-            continue
-        rr, cc = np.nonzero(labels == lab)
-        cy, cx = rr.mean(), cc.mean()
-        rad = max(dist[labels == lab].max() * 0.5, 2)
-        circle = [to_units(cy + rad * math.sin(t), cx + rad * math.cos(t))
-                  for t in np.linspace(0, 2 * math.pi, 9)]
-        strokes.append(circle)
+        if lab not in covered:
+            rr, cc = np.nonzero(labels == lab)
+            strokes.append(circle(rr.mean(), cc.mean(), max(dist[labels == lab].max() * 0.5, 2)))
 
     return strokes
 
@@ -556,6 +590,16 @@ def convert(font, out_path, name, source='', designer='', link='',
     os2 = font['OS/2']
     k = 1000 / upm
     font_id = ''.join(ch for ch in name if ch.isalnum())
+
+    def glyph_top(ch):
+        # fallback for fonts whose OS/2 table predates cap/x-height
+        from fontTools.pens.boundsPen import BoundsPen
+        pen = BoundsPen(gs)
+        gs[cmap[ord(ch)]].draw(pen)
+        return pen.bounds[3] if pen.bounds else 0
+
+    cap_height = getattr(os2, 'sCapHeight', 0) or glyph_top('H')
+    x_height = getattr(os2, 'sxHeight', 0) or glyph_top('x')
     space_adv = round(gs[cmap[32]].width * k)
 
     out = [
@@ -579,8 +623,8 @@ def convert(font, out_path, name, source='', designer='', link='',
         'units-per-em="1000"',
         'ascent="800"',
         'descent="-200"',
-        f'cap-height="{round(os2.sCapHeight * k)}"',
-        f'x-height="{round(os2.sxHeight * k)}"',
+        f'cap-height="{round(cap_height * k)}"',
+        f'x-height="{round(x_height * k)}"',
         '/>',
         f'<missing-glyph horiz-adv-x="{space_adv}" />',
         f'<glyph unicode=" " glyph-name="space" horiz-adv-x="{space_adv}" />',

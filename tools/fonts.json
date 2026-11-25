@@ -1,20 +1,76 @@
 {
   "fonts": [
-    { "label": "EMS Readability", "svg": "EMSReadability.svg" },
-    { "label": "EMS Readability Italic", "svg": "EMSReadabilityItalic.svg" },
-    { "label": "Hershey Script", "svg": "HersheyScript1.svg" },
-    { "label": "Hershey Script Medium", "svg": "HersheyScriptMed.svg" },
-    { "label": "Hershey Serif Medium", "svg": "HersheySerifMed.svg" },
-    { "label": "Hershey Serif Bold", "svg": "HersheySerifBold.svg" },
+    {
+      "label": "EMS Readability",
+      "svg": "EMSReadability.svg"
+    },
+    {
+      "label": "EMS Readability Italic",
+      "svg": "EMSReadabilityItalic.svg"
+    },
+    {
+      "label": "Hershey Script",
+      "svg": "HersheyScript1.svg"
+    },
+    {
+      "label": "Hershey Script Medium",
+      "svg": "HersheyScriptMed.svg"
+    },
+    {
+      "label": "Hershey Serif Medium",
+      "svg": "HersheySerifMed.svg"
+    },
+    {
+      "label": "Hershey Serif Bold",
+      "svg": "HersheySerifBold.svg"
+    },
     {
       "label": "Space Grotesk",
       "svg": "SpaceGrotesk.svg",
       "convert": {
         "url": "https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf",
-        "axes": { "wght": 300 },
+        "axes": {
+          "wght": 300
+        },
         "source": "Space Grotesk Light",
         "designer": "Florian Karsten",
         "link": "https://fonts.google.com/specimen/Space+Grotesk",
+        "license": "SIL Open Font License http://scripts.sil.org/OFL"
+      }
+    },
+    {
+      "label": "Montserrat",
+      "svg": "Montserrat.svg",
+      "convert": {
+        "url": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf",
+        "axes": {
+          "wght": 300
+        },
+        "source": "Montserrat Light",
+        "designer": "Julieta Ulanovsky, Sol Matas, Juan Pablo del Peral, Jacques Le Bailly",
+        "link": "https://fonts.google.com/specimen/Montserrat",
+        "license": "SIL Open Font License http://scripts.sil.org/OFL"
+      }
+    },
+    {
+      "label": "Michroma",
+      "svg": "Michroma.svg",
+      "convert": {
+        "url": "https://github.com/google/fonts/raw/main/ofl/michroma/Michroma-Regular.ttf",
+        "source": "Michroma Regular",
+        "designer": "Vernon Adams",
+        "link": "https://fonts.google.com/specimen/Michroma",
+        "license": "SIL Open Font License http://scripts.sil.org/OFL"
+      }
+    },
+    {
+      "label": "Coda",
+      "svg": "Coda.svg",
+      "convert": {
+        "url": "https://github.com/google/fonts/raw/main/ofl/coda/Coda-Regular.ttf",
+        "source": "Coda Regular",
+        "designer": "Vernon Adams",
+        "link": "https://fonts.google.com/specimen/Coda",
         "license": "SIL Open Font License http://scripts.sil.org/OFL"
       }
     }

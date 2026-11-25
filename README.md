@@ -54,3 +54,6 @@ In Figma desktop: *Plugins → Development → Import plugin from manifest…* a
 Sources
 - Fonts: https://github.com/msurguy/cnc-text-tool/tree/master/src
 - Space Grotesk: https://github.com/floriankarsten/space-grotesk (SIL Open Font License)
+- Montserrat: Julieta Ulanovsky, Sol Matas, Juan Pablo del Peral, Jacques Le Bailly, https://fonts.google.com/specimen/Montserrat (SIL Open Font License)
+- Michroma: Vernon Adams, https://fonts.google.com/specimen/Michroma (SIL Open Font License)
+- Coda: Vernon Adams, https://fonts.google.com/specimen/Coda (SIL Open Font License)
