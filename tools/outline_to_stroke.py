@@ -17,7 +17,7 @@ import math
 import numpy as np
 from fontTools.pens.basePen import BasePen
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageDraw
 from scipy import ndimage
 from skimage.morphology import skeletonize
 
@@ -76,16 +76,19 @@ def rasterise(contours):
     def to_px(p):  # font units (y up) -> pixels (y down)
         return ((p[0] - x0) * RES + PAD, h - ((p[1] - y0) * RES + PAD))
 
-    img = Image.new('1', (w, h), 0)
-    for c in contours:  # even-odd fill via XOR
-        m = Image.new('1', (w, h), 0)
+    # nonzero fill: add each contour with the sign of its direction, so
+    # overlapping contours (common in variable fonts) stay filled
+    winding = np.zeros((h, w), np.int16)
+    for c in contours:
+        area = sum(x0_ * y1_ - x1_ * y0_ for (x0_, y0_), (x1_, y1_) in zip(c, c[1:] + c[:1]))
+        m = Image.new('L', (w, h), 0)
         ImageDraw.Draw(m).polygon([to_px(p) for p in c], fill=1)
-        img = ImageChops.logical_xor(img, m)
+        winding += np.asarray(m, np.int16) * (1 if area > 0 else -1)
 
     def to_units(r, c):
         return ((c - PAD) / RES + x0, (h - r - PAD) / RES + y0)
 
-    return np.ascontiguousarray(np.asarray(img.convert('L')) > 127), to_units
+    return np.ascontiguousarray(winding != 0), to_units
 
 
 # --- skeleton graph -----------------------------------------------------------
@@ -186,25 +189,37 @@ def degrees(E):
 
 
 def prune_spurs(E, width_at, factor=1.2):
-    """Remove short dangling branches created by corners and terminals."""
-    changed = True
-    while changed:
-        changed = False
+    """
+    Remove short dangling branches created by corners and terminals.
+    All spurs at a node are removed in the same pass, so the two corner
+    branches of a flat stroke end disappear together and leave a clean,
+    straight end instead of a bend towards one corner.
+    """
+    while True:
         d = degrees(E)
-        for e in sorted(E, key=lambda e: len(e['pts'])):
+        spurs = []
+        for e in E:
             if e['a'] == e['b']:
                 continue
             for end, other, anchor in (('a', 'b', -1), ('b', 'a', 0)):
-                if d[e[end]] == 1 and d[e[other]] >= 3:
-                    limit = factor * width_at(e['pts'][anchor])
-                    if len(e['pts']) < limit:
-                        E.remove(e)
-                        changed = True
-                        break
-            if changed:
-                break
-    return E
-
+                if d[e[end]] == 1 and d[e[other]] >= 3 and len(e['pts']) < factor * width_at(e['pts'][anchor]):
+                    spurs.append(e)
+                    break
+        if not spurs:
+            return E
+        # never remove every branch of a node: keep the longest one
+        by_node = {}
+        for e in spurs:
+            node = e['b'] if d[e['a']] == 1 else e['a']
+            by_node.setdefault(node, []).append(e)
+        remove = []
+        for node, es in by_node.items():
+            if len(es) >= d[node]:
+                es = sorted(es, key=lambda e: len(e['pts']))[:-1]
+            remove += es
+        if not remove:
+            return E
+        E = [e for e in E if not any(e is r for r in remove)]
 
 def merge_chains(E):
     """Join edges through degree-2 nodes and pair straightest edges at junctions."""
@@ -331,12 +346,64 @@ def contract_junctions(E, dist, node_id):
     return E
 
 
-def fix_ends(E, dist, node_id):
+def _tangent(pts, h):
+    """Unit direction at pts[0], pointing away from the rest of the stroke."""
+    k = min(len(pts) - 1, max(int(round(h)), 3))
+    v = np.subtract(pts[0], pts[k])
+    n = np.linalg.norm(v)
+    return v / n if n > 1e-9 else None
+
+
+def _ray_to_outline(mask, p, v, max_len):
+    """Walk from p along v while inside the glyph; return the last inside point."""
+    last, t = np.asarray(p, float), 0.0
+    while t < max_len:
+        q = np.asarray(p, float) + v * t
+        r, c = int(round(q[0])), int(round(q[1]))
+        if not (0 <= r < mask.shape[0] and 0 <= c < mask.shape[1]) or not mask[r, c]:
+            break
+        last, t = q, t + 0.5
+    return tuple(last)
+
+
+def _intersect(p, v, a, b):
+    """Ray p + t*v (t > 0) with the infinite line through a, b; returns (t, point) or None."""
+    d = np.subtract(b, a)
+    m = np.array([[v[0], -d[0]], [v[1], -d[1]]])
+    if abs(np.linalg.det(m)) < 1e-6:
+        return None
+    t, _ = np.linalg.solve(m, np.subtract(a, p))
+    return (t, tuple(np.add(p, v * t))) if t > 0 else None
+
+
+def _segments_cross(p1, p2, q1, q2):
+    """Intersection point of segments p1-p2 and q1-q2, or None."""
+    d1, d2 = np.subtract(p2, p1), np.subtract(q2, q1)
+    den = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(den) < 1e-9:
+        return None
+    w = np.subtract(q1, p1)
+    t = (w[0] * d2[1] - w[1] * d2[0]) / den
+    u = (w[0] * d1[1] - w[1] * d1[0]) / den
+    if 0 < t < 1 and 0 < u < 1:
+        return tuple(np.add(p1, d1 * t))
+    return None
+
+
+def fix_ends(E, dist, node_id, mask):
     """
-    Skeletons are noisy near stroke ends and junctions. At junctions, replace
-    the last bit of each branch with a straight line into the junction centre.
-    At free ends, cut off the hook caused by angled terminals and extend
-    straight to where the outline ends.
+    Skeletons are unreliable within about a stroke width of stroke ends and
+    junctions, so those parts are rebuilt from the reliable middle:
+
+    Junctions are rebuilt first, so free ends next to a junction measure their
+    direction along an already straightened stroke.
+
+    - Free ends: cut back, then continue along the stroke's own tangent until
+      the outline is reached. Angled terminals end in the middle of the cut.
+    - Junctions: branches that line up become straight through-strokes (the
+      stem of n; both lines of a crossing). Other branches (the arch of n)
+      follow their tangent until they meet the nearest through-stroke.
+      Without a through-stroke all branches meet at the junction centre.
     """
     centres = {}
     for p, nid in node_id.items():
@@ -345,34 +412,93 @@ def fix_ends(E, dist, node_id):
     deg = degrees(E)
 
     for e in E:
-        pts = [tuple(map(float, p)) for p in e['pts']]
-        h = float(np.median([dist[p] for p in e['pts']]))  # half stroke width
+        e['pts'] = [tuple(map(float, p)) for p in e['pts']]
+        e['h'] = max(float(np.median([dist[int(r), int(c)] for r, c in e['pts']])), 1.0)  # half stroke width
+
+    def get(e, end):
+        return e['pts'] if end == 'a' else e['pts'][::-1]
+
+    def put(e, end, pts):
+        e['pts'] = pts if end == 'a' else pts[::-1]
+
+    # junctions
+    at_node = {}
+    for i, e in enumerate(E):
         for end in ('a', 'b'):
-            if end == 'b':
-                pts = pts[::-1]
-            if len(pts) > 6:
-                d = deg.get(e[end], 0)
-                if d >= 3:
-                    c = centres[e[end]]
-                    rest = _trim(pts, c, 1.8 * h)
-                    pts = _line(rest[0], c)[::-1] + rest
-                elif d == 1:
-                    tip = pts[0]
-                    rest = _trim(pts, tip, 1.5 * h)
-                    k = min(len(rest) - 1, max(int(h), 4))
-                    v = np.subtract(rest[0], rest[k])
-                    n = np.linalg.norm(v)
-                    if n > 1e-9:
-                        ext = math.dist(tip, rest[0]) + 0.8 * h
-                        newtip = tuple(np.add(rest[0], v / n * ext))
-                        pts = _line(rest[0], newtip)[::-1] + rest
-            if end == 'b':
-                pts = pts[::-1]
-        e['pts'] = pts
+            if deg.get(e[end], 0) >= 3:
+                at_node.setdefault(e[end], []).append((i, end))
+
+    for node, branches in at_node.items():
+        c = centres[node]
+        info = []
+        for i, end in branches:
+            e = E[i]
+            rest = _trim(get(e, end), c, 1.8 * e['h'])
+            info.append({'i': i, 'end': end, 'rest': rest, 'v': _tangent(rest, e['h'])})
+
+        # pair up branches that continue each other: most collinear first
+        cands = []
+        for x in range(len(info)):
+            for y in range(x + 1, len(info)):
+                vx, vy = info[x]['v'], info[y]['v']
+                if vx is not None and vy is not None:
+                    cos = float(np.dot(vx, vy))
+                    if cos < -0.85:
+                        cands.append((cos, x, y))
+        lines, paired = [], set()
+        for _, x, y in sorted(cands):
+            if x in paired or y in paired:
+                continue
+            paired |= {x, y}
+            p1, p2 = info[x]['rest'][0], info[y]['rest'][0]
+            seg = np.subtract(p2, p1)
+            t = np.clip(np.dot(np.subtract(c, p1), seg) / max(np.dot(seg, seg), 1e-9), 0, 1)
+            mid = tuple(np.add(p1, seg * t))
+            info[x]['target'] = info[y]['target'] = mid
+            lines.append((p1, p2, mid))
+
+        side = [b for k, b in enumerate(info) if k not in paired]
+        for b in side:
+            b['target'] = c
+            if not lines:
+                continue
+            # follow own tangent to the nearest through-stroke
+            best = None
+            if b['v'] is not None:
+                for p1, p2, _ in lines:
+                    hit = _intersect(b['rest'][0], b['v'], p1, p2)
+                    if hit and hit[0] < 6 * E[b['i']]['h'] and (best is None or hit[0] < best[0]):
+                        best = hit
+            b['target'] = best[1] if best else min((m for _, _, m in lines), key=lambda m: math.dist(m, b['rest'][0]))
+
+        # side branches that would cross (arm and leg of k): the one with
+        # further to go stops where it meets the other
+        for b1 in side:
+            for b2 in side:
+                if b1 is b2:
+                    continue
+                hit = _segments_cross(b1['rest'][0], b1['target'], b2['rest'][0], b2['target'])
+                if hit and math.dist(hit, b1['target']) > math.dist(hit, b2['target']):
+                    b1['target'] = hit
+
+        for b in info:
+            put(E[b['i']], b['end'], _line(b['rest'][0], b['target'])[::-1] + b['rest'])
+
+    # free ends
+    for e in E:
+        for end in ('a', 'b'):
+            pts = get(e, end)
+            if deg.get(e[end], 0) != 1 or len(pts) < 4:
+                continue
+            h = e['h']
+            rest = _trim(pts, pts[0], 1.6 * h)
+            v = _tangent(rest, 1.2 * h)
+            if v is None:
+                continue
+            tip = _ray_to_outline(mask, rest[0], v, math.dist(pts[0], rest[0]) + 4 * h)
+            put(e, end, _line(rest[0], tip)[::-1] + rest)
+
     return E
-
-
-# --- per glyph ----------------------------------------------------------------
 
 def glyph_strokes(contours, eps_units=2.0):
     mask, to_units = rasterise(contours)
@@ -388,7 +514,7 @@ def glyph_strokes(contours, eps_units=2.0):
     E = prune_spurs(E, width_at)
     covered = {labels[e['pts'][0]] for e in E}
     E = contract_junctions(E, dist, node_id)
-    E = fix_ends(E, dist, node_id)
+    E = fix_ends(E, dist, node_id, mask)
     E = merge_chains(E)
 
     strokes = []

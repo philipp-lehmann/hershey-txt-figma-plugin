@@ -37,7 +37,7 @@ npm run build
 ```
 `build_fonts.py` writes the font data into `code.ts` (between the `fonts:start` / `fonts:end` markers), so nothing needs to be copied by hand. The plugin UI reads the font list from the plugin at startup.
 
-The outline conversion (`tools/outline_to_stroke.py`) rasterises each glyph, thins it to its centreline and traces it back into polylines. Results are good for most glyphs; places where strokes cross (e.g. `$`, `€`) can look a little rough, and may be touched up by editing the generated SVG in `/fonts` (then run `build_fonts.py` without `--force`).
+The outline conversion (`tools/outline_to_stroke.py`) rasterises each glyph, thins it to its centreline and traces it back into polylines. Stroke ends are continued along their own direction up to the outline, and strokes that line up through a junction are kept straight. If a glyph still needs touching up, edit the generated SVG in `/fonts` (then run `build_fonts.py` without `--force`, which keeps existing SVGs).
 
 ## Development
 Requires Node.js.
