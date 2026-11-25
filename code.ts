@@ -1,226 +1,169 @@
-// Show the plugin UI using the __html__ global variable (populated by build process)
-figma.showUI(__html__);
-figma.ui.resize(400, 480); // Adjusted height slightly to accommodate controls if needed
+// Hershey Text: converts a text layer into single-stroke vector paths for plotters and CNC.
+// Font data (FONTS, FontData) is generated at the bottom of this file by tools/build_fonts.py.
 
-// Helper function to get initial text properties
-function getInitialTextProperties() {
-    const selectedNode = figma.currentPage.selection[0];
-    let initialFontSize: number = 50; // Default
-    let initialLineHeight: number = 28; // Default
-    let initialLetterSpacing: number = 0; // Default
+// --- Messages between plugin and UI -----------------------------------------------
 
-    if (selectedNode && selectedNode.type === 'TEXT') {
-        // Get initial font size
-        if (typeof selectedNode.fontSize === 'number') {
-            initialFontSize = selectedNode.fontSize;
-        } else if (Array.isArray(selectedNode.fontSize) && selectedNode.fontSize.length > 0) {
-            initialFontSize = selectedNode.fontSize[0];
-        }
-
-        // Get initial line height
-        if (typeof selectedNode.lineHeight === 'number') { // PIXELS
-            initialLineHeight = selectedNode.lineHeight;
-        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PIXELS') {
-            initialLineHeight = selectedNode.lineHeight.value;
-        } else if (selectedNode.lineHeight && typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'PERCENT') {
-            initialLineHeight = (selectedNode.lineHeight.value / 100) * initialFontSize;
-        } else if (selectedNode.lineHeight === figma.mixed || (typeof selectedNode.lineHeight === 'object' && selectedNode.lineHeight.unit === 'AUTO')) {
-            // Guesstimate auto line height as 150% of font size
-            initialLineHeight = initialFontSize * 1.5;
-        }
-
-        // Get initial letter spacing
-        if (typeof selectedNode.letterSpacing === 'number') { // PIXELS (older API)
-            initialLetterSpacing = selectedNode.letterSpacing;
-        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PIXELS') {
-            initialLetterSpacing = selectedNode.letterSpacing.value;
-        } else if (selectedNode.letterSpacing && typeof selectedNode.letterSpacing === 'object' && selectedNode.letterSpacing.unit === 'PERCENT') {
-            initialLetterSpacing = selectedNode.letterSpacing.value;
-        }
-    }
-
-    return { initialFontSize, initialLineHeight, initialLetterSpacing };
+interface TextSettings {
+    fontSize: number;
+    lineHeight: number;     // px
+    letterSpacing: number;  // % of font size
 }
 
-// Initial load: Get properties and send to UI
-const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
-figma.ui.postMessage({
-    type: 'set-initial-values',
-    fontSize: initialFontSize,
-    lineHeight: initialLineHeight,
-    letterSpacing: initialLetterSpacing
-});
+type UiMessage =
+    | ({ type: 'convert'; font: string; lineWidth: number } & TextSettings)
+    | { type: 'close' };
 
-// Listen for selection changes
-figma.on('selectionchange', () => {
-    const newSelection = figma.currentPage.selection;
-    if (newSelection.length === 1 && newSelection[0].type === 'TEXT') {
-        // If a single text node is selected, update UI with its properties
-        const { initialFontSize, initialLineHeight, initialLetterSpacing } = getInitialTextProperties();
-        figma.ui.postMessage({
-            type: 'set-initial-values',
-            fontSize: initialFontSize,
-            lineHeight: initialLineHeight,
-            letterSpacing: initialLetterSpacing
-        });
-        figma.notify('Updated values from selected text layer.', { timeout: 1000 });
-    } else {
-        // If no text node or multiple nodes are selected, revert to defaults and notify
-        figma.ui.postMessage({
-            type: 'set-initial-values',
-            fontSize: 50, // Default font size
-            lineHeight: 28, // Default line height
-            letterSpacing: 0 // Default letter spacing
-        });
-        figma.notify('No single text layer selected. Reverted to default values.', { timeout: 1000 });
-    }
-});
+type PluginMessage =
+    | { type: 'init'; fonts: string[]; font?: string }
+    | { type: 'selection'; textSelected: boolean; settings?: TextSettings };
 
-// Listen for messages from the UI
-figma.ui.onmessage = async (msg) => {
-    if (msg.type === 'convert-text') {
-        const { fontSize, lineWidth, lineHeight, letterSpacing, textStyle } = msg;
+function post(msg: PluginMessage) {
+    figma.ui.postMessage(msg);
+}
 
-        // Ensure only one text node is selected
-        if (figma.currentPage.selection.length !== 1 || figma.currentPage.selection[0].type !== 'TEXT') {
-            figma.notify('Please select exactly one text layer to convert.', { timeout: 3000 });
-            figma.ui.postMessage({ type: 'close' }); // Close UI if selection is invalid
-            return;
-        }
+// --- Font metrics (all fonts are normalised to these by tools/build_fonts.py) -------
 
-        const selectedTextNode = figma.currentPage.selection[0] as TextNode;
-        const lines = selectedTextNode.characters.split('\n');
-        const originalFill = selectedTextNode.fills; // Get original fill color for stroke
+const UNITS_PER_EM = 1000;
+const ASCENT = 800;
+const FALLBACK_ADVANCE = 350;
+const AUTO_LINE_HEIGHT = 1.5;
 
-        // Font metrics from EMS Readability SVG font (units-per-em and ascent)
-        const unitsPerEm = 1000;
-        const fontAscent = 800; // Ascent value from your font-face metadata
+// --- Selection ------------------------------------------------------------------
 
-        // Fonts are generated into FONTS (bottom of this file) by tools/build_fonts.py
-        const selectedFontData: FontData = FONTS[textStyle] || FONTS[Object.keys(FONTS)[0]];
+function selectedText(): TextNode | null {
+    const selection = figma.currentPage.selection;
+    return selection.length === 1 && selection[0].type === 'TEXT' ? selection[0] : null;
+}
 
-        // Calculate scaling factor based on desired font size and units-per-em
-        const scale = fontSize / unitsPerEm;
-        const characterSpacing = letterSpacing * scale * 10; // Add some spacing between characters
-        const lineHeightSpacing = lineHeight; // Use the provided lineHeight directly for spacing (assuming it's in pixels)
+function readSettings(node: TextNode): TextSettings {
+    // Mixed styles: use the style of the first character
+    const hasChars = node.characters.length > 0;
+    const fontSize = node.fontSize !== figma.mixed ? node.fontSize
+        : hasChars ? node.getRangeFontSize(0, 1) as number : 12;
+    const lh = node.lineHeight !== figma.mixed ? node.lineHeight
+        : hasChars ? node.getRangeLineHeight(0, 1) as LineHeight : { unit: 'AUTO' } as LineHeight;
+    const ls = node.letterSpacing !== figma.mixed ? node.letterSpacing
+        : hasChars ? node.getRangeLetterSpacing(0, 1) as LetterSpacing : { unit: 'PERCENT', value: 0 } as LetterSpacing;
 
-        const allVectorPaths: VectorPath[] = [];
-        let currentYOffset = 0; // Vertical offset for each line
+    const lineHeight = lh.unit === 'PIXELS' ? lh.value
+        : lh.unit === 'PERCENT' ? lh.value / 100 * fontSize
+        : fontSize * AUTO_LINE_HEIGHT;
+    const letterSpacing = ls.unit === 'PERCENT' ? ls.value : ls.value / fontSize * 100;
 
-        // Process each line of text
-        for (let i = 0; i < lines.length; i++) {
-            const lineContent = lines[i];
-            let currentXOffset = 0; // Horizontal offset for characters within the current line
+    const round = (v: number) => Math.round(v * 100) / 100;
+    return { fontSize: round(fontSize), lineHeight: round(lineHeight), letterSpacing: round(letterSpacing) };
+}
 
-            // Generate paths for each character in the current line
-            for (const char of lineContent) {
-                const charEntry = selectedFontData.glyphs[char] || { paths: [], horiz_adv_x: 0 }; // Get data for the character, or empty if not found
-                const charData = charEntry.paths;
-                const horizAdvX = charEntry.horiz_adv_x;
+function sendSelection() {
+    const node = selectedText();
+    post({ type: 'selection', textSelected: !!node, settings: node ? readSettings(node) : undefined });
+}
 
-                if (charData.length === 0) {
-                    if (char === ' ') {
-                        // Add a default gap for space characters
-                        currentXOffset += 350 * scale + characterSpacing; // Adjust this value as needed for the space width
-                    } else {
-                        // If character data is missing and it's not a space, notify and skip
-                        console.warn(`${textStyle}: no glyph for character: ${char}. Skipping.`);
-                        currentXOffset += 350 * scale + characterSpacing; // Advance X for missing char, using a default width
-                    }
+// --- Conversion -----------------------------------------------------------------
+
+function buildPaths(text: string, font: FontData, s: TextSettings): { paths: VectorPath[]; missing: Set<string> } {
+    const scale = s.fontSize / UNITS_PER_EM;
+    const tracking = s.letterSpacing / 100 * s.fontSize;
+    const paths: VectorPath[] = [];
+    const missing = new Set<string>();
+
+    text.split('\n').forEach((line, lineIndex) => {
+        const y0 = lineIndex * s.lineHeight;
+        let x0 = 0;
+        for (const char of line) {
+            const glyph = font.glyphs[char];
+            if (!glyph) {
+                missing.add(char);
+                x0 += FALLBACK_ADVANCE * scale + tracking;
+                continue;
+            }
+            let data = '';
+            let penDown = false;
+            for (const point of glyph.paths) {
+                if (point === null) {
+                    penDown = false;
                     continue;
                 }
-
-                let pathData = "";
-                let penDown = false;
-                let charMinX = Infinity;
-                let charMaxX = -Infinity;
-
-                // Convert font coordinates to SVG path commands
-                for (const segment of charData) {
-                    if (segment === null) {
-                        penDown = false; // Pen up, start new subpath
-                    } else {
-                        const [x, y] = segment;
-                        charMinX = Math.min(charMinX, x);
-                        charMaxX = Math.max(charMaxX, x);
-
-                        const transformedX = x * scale + currentXOffset;
-                        const transformedY = (fontAscent - y) * scale + currentYOffset;
-
-                        if (!penDown) {
-                            pathData += `M ${transformedX} ${transformedY} `;
-                            penDown = true;
-                        } else {
-                            pathData += `L ${transformedX} ${transformedY} `;
-                        }
-                    }
-                }
-
-                if (pathData) {
-                    allVectorPaths.push({
-                        windingRule: 'NONZERO',
-                        data: pathData.trim()
-                    });
-                }
-
-                // Advance X offset for the next character using the character's horiz_adv_x
-                const charWidth = horizAdvX * scale; // Apply scale to horiz_adv_x
-                currentXOffset += charWidth + characterSpacing; // Advance by char's width and letter spacing
+                const x = point[0] * scale + x0;
+                const y = (ASCENT - point[1]) * scale + y0;
+                data += `${penDown ? 'L' : 'M'} ${x} ${y} `;
+                penDown = true;
             }
-
-            // After processing a line, advance the Y offset for the next line
-            currentYOffset += lineHeightSpacing;
+            if (data) {
+                paths.push({ windingRule: 'NONE', data: data.trim() });
+            }
+            x0 += (glyph.horiz_adv_x || FALLBACK_ADVANCE) * scale + tracking;
         }
+    });
+    return { paths, missing };
+}
 
-        // Create a new VectorNode
-        const vectorNode = figma.createVector();
-        vectorNode.name = `${selectedTextNode.name}`;
-        vectorNode.vectorPaths = allVectorPaths;
+const FONT_KEY = 'lastFont';
 
-        // Set stroke properties
-        vectorNode.strokeWeight = lineWidth;
-        vectorNode.strokeCap = 'SQUARE';
-
-        if (Array.isArray(originalFill) && originalFill[0] && originalFill[0].type === 'SOLID') {
-            vectorNode.strokes = [{
-                type: 'SOLID',
-                color: originalFill[0].color,
-                opacity: originalFill[0].opacity || 1,
-            }];
-        } else {
-            vectorNode.strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
-        }
-
-        // Position the new vector node relative to the original text node
-        vectorNode.x = selectedTextNode.x;
-        vectorNode.y = selectedTextNode.y + selectedTextNode.height + 10;
-
-        // Add the new vector node to the current page
-        figma.currentPage.appendChild(vectorNode);
-
-        // Select the newly created vector node
-        figma.currentPage.selection = [vectorNode];
-
-        // Zoom to fit the new node (optional)
-        figma.viewport.scrollAndZoomIntoView([vectorNode]);
-
-        figma.notify('Text converted to EMS Readability vector paths!', { timeout: 2000 });
-        figma.ui.postMessage({ type: 'close' }); // Close the UI after conversion
-
-    } else if (msg.type === 'cancel') {
-        // Close the plugin UI if the cancel button is clicked
-        figma.ui.postMessage({ type: 'close' });
-    } else if (msg.type === 'close') {
-        // When the UI sends a 'close' message, close the plugin
-        figma.closePlugin();
+function convert(msg: Extract<UiMessage, { type: 'convert' }>) {
+    const node = selectedText();
+    if (!node) {
+        figma.notify('Select a single text layer to convert.', { error: true });
+        return;
     }
-};
+    const font = FONTS[msg.font] ?? FONTS[Object.keys(FONTS)[0]];
+    const { paths, missing } = buildPaths(node.characters, font, msg);
+    if (paths.length === 0) {
+        figma.notify('Nothing to convert.', { error: true });
+        return;
+    }
+
+    const vector = figma.createVector();
+    vector.name = `${node.name} (${msg.font})`;
+    vector.vectorPaths = paths;
+    vector.fills = [];
+    vector.strokeWeight = msg.lineWidth;
+    vector.strokeCap = 'SQUARE';
+    const fill = Array.isArray(node.fills) ? (node.fills as readonly Paint[]).find(p => p.type === 'SOLID') as SolidPaint | undefined : undefined;
+    vector.strokes = [{ type: 'SOLID', color: fill ? fill.color : { r: 0, g: 0, b: 0 }, opacity: fill?.opacity ?? 1 }];
+
+    // Place it next to the source layer, in the same parent
+    const parent = node.parent ?? figma.currentPage;
+    parent.insertChild(parent.children.indexOf(node) + 1, vector);
+    const inAutoLayout = 'layoutMode' in parent && parent.layoutMode !== 'NONE';
+    if (!inAutoLayout) {
+        vector.x = node.x;
+        vector.y = node.y + node.height + 10;
+    }
+
+    figma.clientStorage.setAsync(FONT_KEY, msg.font).catch(() => { /* not critical */ });
+    figma.currentPage.selection = [vector];
+    figma.viewport.scrollAndZoomIntoView([vector]);
+    figma.notify(missing.size
+        ? `Converted. ${msg.font} has no glyph for: ${[...missing].join(' ')}`
+        : `Converted to ${msg.font}.`);
+}
+
+// --- Plugin lifecycle -------------------------------------------------------------
+
+// Called at the very end of the file, after the generated FONTS are defined
+async function main() {
+    figma.showUI(__html__, { width: 280, height: 380, themeColors: true });
+    const font: string | undefined = await figma.clientStorage.getAsync(FONT_KEY).catch(() => undefined);
+    post({ type: 'init', fonts: Object.keys(FONTS), font });
+    sendSelection();
+    figma.on('selectionchange', sendSelection);
+
+    figma.ui.onmessage = (msg: UiMessage) => {
+        if (msg.type === 'convert') {
+            convert(msg);
+        } else if (msg.type === 'close') {
+            figma.closePlugin();
+        }
+    };
+}
 
 // fonts:start
 // Generated by tools/build_fonts.py from tools/fonts.json. Do not edit by hand.
 type FontData = { glyphs: { [key: string]: { paths: Array<[number, number] | null>, horiz_adv_x: number } } };
 const FONTS: { [label: string]: FontData } = {
     "EMS Readability": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 280, paths: [null, [195, 674], [195, 192], null, [173, 69.3], [173, 18.9], [220, 18.9], [220, 69.3], [173, 69.3]] },
         "\"": { horiz_adv_x: 381, paths: [null, [117, 693], [120, 491], null, [255, 693], [261, 491]] },
         "#": { horiz_adv_x: 501, paths: [null, [202, 649], [123, 15.8], null, [381, 649], [302, 15.8], null, [72.5, 447], [450, 447], null, [53.5, 246], [428, 246]] },
@@ -427,6 +370,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u0131": { horiz_adv_x: 252, paths: [null, [126, 15.8], [126, 479]] },
     } },
     "EMS Readability Italic": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 280, paths: [null, [330, 674], [245, 192], null, [198, 69.3], [192, 18.9], [239, 18.9], [248, 69.3], [198, 69.3]] },
         "\"": { horiz_adv_x: 381, paths: [null, [255, 693], [224, 491], null, [394, 693], [365, 491]] },
         "#": { horiz_adv_x: 501, paths: [null, [331, 649], [142, 15.8], null, [513, 649], [321, 15.8], null, [167, 447], [545, 447], null, [113, 246], [488, 246]] },
@@ -633,6 +577,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u02d8": { horiz_adv_x: 504, paths: [null, [489, 464], [489, 464], [403.7, 302], [281, 302], [158.3, 302], [153, 474], [153, 474]] },
     } },
     "Hershey Script": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 346, paths: [null, [353, 662], [321, 630], [258, 252], null, [353, 630], [258, 252], null, [353, 662], [384, 630], [258, 252], null, [195, 63], [164, 31.5], [195, 0], [227, 31.5], [195, 63]] },
         "\"": { horiz_adv_x: 567, paths: [null, [252, 662], [189, 441], null, [284, 662], [189, 441], null, [536, 662], [472, 441], null, [567, 662], [472, 441]] },
         "#": { horiz_adv_x: 662, paths: [null, [378, 788], [158, -220], null, [567, 788], [346, -220], null, [158, 378], [598, 378], null, [126, 189], [567, 189]] },
@@ -839,6 +784,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u015e": { horiz_adv_x: 630, paths: [null, [271.92, -105.92], [304.45, -116.49], [332, -123.81], [349.48, -97.47], [371.72, -61.34], [331.7, -56.69], [350.95, -2.29], null, [31.5, 0], [94.5, 31.5], [158, 94.5], [252, 220], [315, 315], [378, 441], [410, 536], [410, 630], [378, 662], [346, 662], [315, 630], [284, 567], [284, 504], [315, 441], [378, 378], [472, 315], [536, 252], [567, 189], [567, 126], [536, 63], [504, 31.5], [410, 0], [284, 0], [189, 31.5], [126, 94.5], [94.5, 158], [94.5, 220]] },
     } },
     "Hershey Script Medium": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 346, paths: [null, [353, 662], [321, 630], [258, 252], null, [353, 630], [258, 252], null, [353, 662], [384, 630], [258, 252], null, [195, 63], [164, 31.5], [195, 0], [227, 31.5], [195, 63]] },
         "\"": { horiz_adv_x: 567, paths: [null, [252, 662], [189, 441], null, [284, 662], [189, 441], null, [536, 662], [472, 441], null, [567, 662], [472, 441]] },
         "#": { horiz_adv_x: 662, paths: [null, [378, 662], [158, -220], null, [567, 662], [346, -220], null, [158, 315], [598, 315], null, [126, 126], [567, 126]] },
@@ -1045,6 +991,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u015e": { horiz_adv_x: 630, paths: [null, [191.45, -21.38], [195.06, -31.49], [192.55, -46.54], [198.81, -54.81], [230.45, -96.66], [211.47, -167.47], [127.49, -131.51], [157.86, -131.36], [183.12, -129.85], [190.53, -102.79], [199.21, -66.13], [164.18, -73.36], [165.26, -22.14], null, [220, 567], [189, 504], [189, 441], [220, 378], [284, 346], [378, 346], [472, 378], [536, 410], [630, 504], [662, 598], [662, 630], [630, 662], [598, 662], [536, 630], [504, 598], [472, 536], [441, 441], [378, 220], [346, 126], [284, 31.5], [220, 0], null, [472, 536], [441, 410], [410, 189], [378, 94.5], [315, 31.5], [220, 0], [126, 0], [63, 31.5], [31.5, 94.5], [31.5, 126], [63, 158], [94.5, 126], [63, 94.5]] },
     } },
     "Hershey Serif Medium": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 315, paths: [null, [284, 662], [252, 598], [284, 220], [315, 598], [284, 662], null, [284, 598], [284, 410], null, [284, 63], [252, 31.5], [284, 0], [315, 31.5], [284, 63]] },
         "\"": { horiz_adv_x: 567, paths: [null, [220, 662], [189, 630], [189, 441], null, [220, 630], [189, 441], null, [220, 662], [252, 630], [189, 441], null, [504, 662], [472, 630], [472, 441], null, [504, 630], [472, 441], null, [504, 662], [536, 630], [472, 441]] },
         "#": { horiz_adv_x: 662, paths: [null, [410, 788], [189, -220], null, [598, 788], [378, -220], null, [189, 378], [630, 378], null, [158, 189], [598, 189]] },
@@ -1251,6 +1198,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u00c7": { horiz_adv_x: 662, paths: [null, [412, 0], [409.51, -16.85], [411.38, -33.43], [411.38, -33.43], [464.11, -63.43], [441.43, -171.55], [304.04, -110.12], [346.2, -109.97], [394, -124.2], [404.29, -97.13], [416.34, -60.48], [376.5, -51.22], [378, 0], null, null, [598, 567], [630, 472], [630, 662], [598, 567], [536, 630], [441, 662], [378, 662], [284, 630], [220, 567], [189, 504], [158, 410], [158, 252], [189, 158], [220, 94.5], [284, 31.5], [378, 0], [441, 0], [536, 31.5], [598, 94.5], [630, 158], null, [378, 662], [315, 630], [252, 567], [220, 504], [189, 410], [189, 252], [220, 158], [252, 94.5], [315, 31.5], [378, 0]] },
     } },
     "Hershey Serif Bold": { glyphs: {
+        " ": { horiz_adv_x: 378, paths: [] },
         "!": { horiz_adv_x: 346, paths: [null, [258, 662], [227, 630], [227, 567], [258, 315], null, [258, 662], [258, 220], [290, 220], null, [258, 662], [290, 662], [290, 220], null, [290, 662], [321, 630], [321, 567], [290, 315], null, [258, 94.5], [227, 63], [227, 31.5], [258, 0], [290, 0], [321, 31.5], [321, 63], [290, 94.5], [258, 94.5], null, [258, 63], [258, 31.5], [290, 31.5], [290, 63], [258, 63]] },
         "\"": { horiz_adv_x: 567, paths: [null, [189, 662], [158, 630], [158, 441], null, [189, 630], [158, 441], null, [189, 662], [220, 630], [158, 441], null, [472, 662], [441, 630], [441, 441], null, [472, 630], [441, 441], null, [472, 662], [504, 630], [441, 441]] },
         "#": { horiz_adv_x: 662, paths: [null, [378, 788], [158, -220], null, [567, 788], [346, -220], null, [158, 378], [598, 378], null, [126, 189], [567, 189]] },
@@ -1457,6 +1405,7 @@ const FONTS: { [label: string]: FontData } = {
         "\u00df": { horiz_adv_x: 693, paths: [null, [559, 598], [590, 536], [590, 472], [559, 410], null, [460, 662], [524, 630], [555, 567], [555, 441], [524, 378], [460, 346], null, [271.62, 0], [114.5, 0], null, [587, 284], [618, 220], [618, 126], [587, 63], null, [492, 346], [556, 315], [587, 252], [587, 94.5], [556, 31.5], [492, 0], null, [209, 31.5], [146, 0], null, [209, 63], [178, 0], null, [392, 346], [492, 346], [587, 315], [618, 284], [650, 220], [650, 126], [618, 63], [587, 31.5], [492, 0], [391.62, 0], [391.62, 61.75], null, [464, 346], [559, 378], [590, 410], [622, 472], [622, 536], [590, 598], [559, 630], [464, 662], [367.7, 662.01], [272, 630.03], [241, 598.03], [209, 536.03], [209, 457.01], [209, 0], null, [272, 598.03], [241, 536.03], [240.5, 461.01], [240, 31.5], null, [367, 662.03], [303, 630.03], [272, 567.03], [272, 411.51], [272, 0]] },
     } },
     "Space Grotesk": { glyphs: {
+        " ": { horiz_adv_x: 258, paths: [] },
         "!": { horiz_adv_x: 234, paths: [null, [117.5, 43], [116.5, 43], null, [117, 175.8], [117, 694.7]] },
         "\"": { horiz_adv_x: 388, paths: [null, [265.7, 681.1], [292.5, 638.8], [305.8, 625.5], [302.3, 553.5], [296.4, 538], [287, 528.4], [225.5, 499.7], null, [111.7, 681.1], [138.5, 638.8], [151.8, 625.5], [148.3, 553.5], [142.4, 538], [133, 528.4], [71.5, 499.7]] },
         "#": { horiz_adv_x: 625, paths: [null, [418, 5.2], [418, 695.3], null, [576.7, 238], [48.3, 238], null, [576.7, 462], [48.3, 462], null, [206, 695.3], [206, 5.2]] },
@@ -1673,3 +1622,5 @@ const FONTS: { [label: string]: FontData } = {
     } },
 };
 // fonts:end
+
+main().catch((error) => figma.closePlugin(`Hershey Text failed to start: ${error}`));

@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
     "target": "es6",
-    "lib": ["es6"],
+    "lib": [
+      "es6"
+    ],
     "module": "esnext",
-    "moduleResolution": "node", 
-    "jsx": "react",
+    "moduleResolution": "node",
     "strict": true,
-    "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "typeRoots": [
@@ -16,7 +16,6 @@
     "downlevelIteration": true
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx"
+    "code.ts"
   ]
 }

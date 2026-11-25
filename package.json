@@ -1,47 +1,23 @@
 {
   "name": "Hershey-Text",
   "version": "1.0.0",
-  "description": "Your Figma Plugin",
+  "description": "Convert Figma text layers into single-stroke vector paths for plotters and CNC",
   "main": "code.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "lint": "eslint --ext .ts,.tsx --ignore-pattern node_modules .",
-    "lint:fix": "eslint --ext .ts,.tsx --ignore-pattern node_modules --fix .",
-    "watch": "npm run build -- --watch"
+    "watch": "npm run build -- --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "fonts": "python3 tools/build_fonts.py"
   },
   "author": "",
   "license": "",
   "devDependencies": {
-    "@figma/eslint-plugin-figma-plugins": "*",
-    "@figma/plugin-typings": "^1.116.0",
-    "@typescript-eslint/eslint-plugin": "^6.12.0",
-    "@typescript-eslint/parser": "^6.12.0",
-    "eslint": "^8.54.0",
-    "ts-loader": "^9.5.2",
-    "typescript": "^5.8.3",
-    "webpack": "^5.101.0",
-    "webpack-cli": "^6.0.1"
-  },
-  "eslintConfig": {
-    "extends": [
-      "eslint:recommended",
-      "plugin:@typescript-eslint/recommended",
-      "plugin:@figma/figma-plugins/recommended"
-    ],
-    "parser": "@typescript-eslint/parser",
-    "parserOptions": {
-      "project": "./tsconfig.json"
-    },
-    "root": true,
-    "rules": {
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          "argsIgnorePattern": "^_",
-          "varsIgnorePattern": "^_",
-          "caughtErrorsIgnorePattern": "^_"
-        }
-      ]
-    }
+    "@eslint/js": "^9.39.5",
+    "@figma/eslint-plugin-figma-plugins": "^1.0.0",
+    "@figma/plugin-typings": "^1.143.0",
+    "eslint": "^9.39.5",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.74.0"
   }
 }

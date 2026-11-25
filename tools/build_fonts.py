@@ -5,8 +5,9 @@ Build all plugin fonts from tools/fonts.json.
    downloaded ("url") or read from disk ("file", relative to tools/), pinned
    to the given variable-font "axes", and converted to a single-stroke SVG
    font in /fonts. Existing SVGs are kept unless --force (or --only) is used.
-2. All SVG fonts listed are parsed and written into code.ts and ui.html,
-   between the "fonts:start" / "fonts:end" markers, in the order listed.
+2. All SVG fonts listed are parsed and written into code.ts between the
+   "fonts:start" / "fonts:end" markers, in the order listed (this is also the
+   order of the plugin's font dropdown).
 
 Usage (from anywhere):
     python tools/build_fonts.py                       # convert missing fonts, regenerate code
@@ -30,7 +31,6 @@ FONTS_DIR = os.path.join(ROOT, 'fonts')
 CACHE_DIR = os.path.join(TOOLS, '.cache')
 CONFIG = os.path.join(TOOLS, 'fonts.json')
 CODE_TS = os.path.join(ROOT, 'code.ts')
-UI_HTML = os.path.join(ROOT, 'ui.html')
 
 SVG_NS = '{http://www.w3.org/2000/svg}'
 
@@ -98,9 +98,10 @@ def parse_svg_font(path):
     glyphs = {}
     for g in font.findall(f'{SVG_NS}glyph'):
         ch, d = g.get('unicode'), g.get('d')
-        if not ch or not d or not ch.isprintable():
+        if not ch or not ch.isprintable():
             continue
-        glyphs[ch] = {'paths': parse_path(d), 'horiz_adv_x': float(g.get('horiz-adv-x', default_adv))}
+        # glyphs without a path (space) are kept for their advance width
+        glyphs[ch] = {'paths': parse_path(d) if d else [], 'horiz_adv_x': float(g.get('horiz-adv-x', default_adv))}
     return glyphs
 
 
@@ -141,16 +142,6 @@ def write_code(fonts):
     with open(CODE_TS, 'w') as fh:
         fh.write(code)
 
-    def esc(s):
-        return s.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
-
-    options = '\n'.join(f'        <option value="{esc(f["label"])}">{esc(f["label"])}</option>' for f in fonts)
-    with open(UI_HTML) as fh:
-        ui = fh.read()
-    ui = replace_between(ui, '<!-- fonts:start -->', '<!-- fonts:end -->', options, UI_HTML)
-    with open(UI_HTML, 'w') as fh:
-        fh.write(ui)
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -174,7 +165,7 @@ def main():
     if missing:
         sys.exit(f'Missing SVG fonts in /fonts: {", ".join(missing)}')
 
-    print('Writing code.ts and ui.html')
+    print('Writing code.ts')
     write_code(fonts)
     print('Done. Now run: npm run build')
 
