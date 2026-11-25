@@ -7,11 +7,37 @@ More fonts and options are planned.
 ![Screenshot of the Plugin](./docs/screenshot.png)
 
 
+## Fonts
+All fonts are listed in `tools/fonts.json`, in the order they appear in the plugin's dropdown.
+
+- **Single-stroke SVG fonts** (Hershey, EMS) live in `/fonts` and only need an entry with `label` and `svg`.
+- **Outline fonts** (TTF/OTF, e.g. from Google Fonts) are converted to single-stroke fonts automatically. Add a `convert` block with a `url` (or a local `file`, relative to `tools/`) and optionally `axes` to pin a variable font, e.g. `{ "wght": 300 }`. Lighter weights give cleaner centrelines.
+
+```json
+{
+  "label": "Space Grotesk",
+  "svg": "SpaceGrotesk.svg",
+  "convert": {
+    "url": "https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf",
+    "axes": { "wght": 300 },
+    "source": "Space Grotesk Light",
+    "designer": "Florian Karsten",
+    "link": "https://fonts.google.com/specimen/Space+Grotesk"
+  }
+}
+```
+
 ## Workflow
-Convert all fonts in `/fonts` to data objects with the script in `/tools`. 
-Run the script with `python convert_all_fonts.py `
-This creates a new file in `/fontsdata/combined_fonts.ts`. Copy the content to `code.ts`.
-Build the plugin with `npm run watch` or `npm run build`.
+```sh
+pip install fonttools numpy scipy scikit-image pillow
+python tools/build_fonts.py                         # convert new outline fonts, regenerate font data
+python tools/build_fonts.py --only "Space Grotesk"  # re-convert one font
+python tools/build_fonts.py --force                 # re-convert all outline fonts
+npm run build
+```
+`build_fonts.py` writes the font data into `code.ts` and the dropdown options into `ui.html` (between the `fonts:start` / `fonts:end` markers), so nothing needs to be copied by hand.
+
+The outline conversion (`tools/outline_to_stroke.py`) rasterises each glyph, thins it to its centreline and traces it back into polylines. Results are good for most glyphs; places where strokes cross (e.g. `$`, `€`) can look a little rough, and may be touched up by editing the generated SVG in `/fonts` (then run `build_fonts.py` without `--force`).
 
 
 ---
@@ -63,3 +89,4 @@ That's it! Visual Studio Code will regenerate the JavaScript file every time you
 
 Sources
 - Fonts: https://github.com/msurguy/cnc-text-tool/tree/master/src
+- Space Grotesk: https://github.com/floriankarsten/space-grotesk (SIL Open Font License)

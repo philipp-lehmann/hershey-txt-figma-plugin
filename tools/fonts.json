@@ -1,0 +1,22 @@
+{
+  "fonts": [
+    { "label": "EMS Readability", "svg": "EMSReadability.svg" },
+    { "label": "EMS Readability Italic", "svg": "EMSReadabilityItalic.svg" },
+    { "label": "Hershey Script", "svg": "HersheyScript1.svg" },
+    { "label": "Hershey Script Medium", "svg": "HersheyScriptMed.svg" },
+    { "label": "Hershey Serif Medium", "svg": "HersheySerifMed.svg" },
+    { "label": "Hershey Serif Bold", "svg": "HersheySerifBold.svg" },
+    {
+      "label": "Space Grotesk",
+      "svg": "SpaceGrotesk.svg",
+      "convert": {
+        "url": "https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf",
+        "axes": { "wght": 300 },
+        "source": "Space Grotesk Light",
+        "designer": "Florian Karsten",
+        "link": "https://fonts.google.com/specimen/Space+Grotesk",
+        "license": "SIL Open Font License http://scripts.sil.org/OFL"
+      }
+    }
+  ]
+}

@@ -6,3 +6,19 @@ node_modules
 out/
 dist/
 code.js
+
+# Font build
+tools/.cache/
+__pycache__/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Icon
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.DocumentRevisions-V100

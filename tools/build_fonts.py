@@ -1,0 +1,183 @@
+"""
+Build all plugin fonts from tools/fonts.json.
+
+1. Every entry with a "convert" block is an outline font (TTF/OTF). It is
+   downloaded ("url") or read from disk ("file", relative to tools/), pinned
+   to the given variable-font "axes", and converted to a single-stroke SVG
+   font in /fonts. Existing SVGs are kept unless --force (or --only) is used.
+2. All SVG fonts listed are parsed and written into code.ts and ui.html,
+   between the "fonts:start" / "fonts:end" markers, in the order listed.
+
+Usage (from anywhere):
+    python tools/build_fonts.py                       # convert missing fonts, regenerate code
+    python tools/build_fonts.py --force               # re-convert every outline font
+    python tools/build_fonts.py --only "Space Grotesk" # re-convert one font
+Then: npm run build
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.request
+import xml.etree.ElementTree as ET
+
+from fontTools.ttLib import TTFont
+
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(TOOLS)
+FONTS_DIR = os.path.join(ROOT, 'fonts')
+CACHE_DIR = os.path.join(TOOLS, '.cache')
+CONFIG = os.path.join(TOOLS, 'fonts.json')
+CODE_TS = os.path.join(ROOT, 'code.ts')
+UI_HTML = os.path.join(ROOT, 'ui.html')
+
+SVG_NS = '{http://www.w3.org/2000/svg}'
+
+
+# --- step 1: outline -> single-stroke SVG ---------------------------------------
+
+def load_outline(spec):
+    if 'file' in spec:
+        path = os.path.join(TOOLS, spec['file'])
+    else:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        fname = re.sub(r'[^A-Za-z0-9._-]', '_', urllib.request.unquote(spec['url'].rsplit('/', 1)[-1]))
+        path = os.path.join(CACHE_DIR, fname)
+        if not os.path.exists(path):
+            print(f'  downloading {spec["url"]}')
+            urllib.request.urlretrieve(spec['url'], path)
+    font = TTFont(path)
+    axes = spec.get('axes')
+    if axes and 'fvar' in font:
+        from fontTools.varLib import instancer
+        font = instancer.instantiateVariableFont(font, axes)
+    return font
+
+
+def convert_outlines(fonts, force, only):
+    from outline_to_stroke import convert
+    for f in fonts:
+        spec = f.get('convert')
+        if not spec:
+            continue
+        out = os.path.join(FONTS_DIR, f['svg'])
+        if only and f['label'] not in only:
+            continue
+        if os.path.exists(out) and not (force or only):
+            continue
+        print(f'Converting {f["label"]}')
+        convert(load_outline(spec), out, f['label'],
+                source=spec.get('source', ''), designer=spec.get('designer', ''),
+                link=spec.get('link', ''),
+                license=spec.get('license', 'SIL Open Font License http://scripts.sil.org/OFL'))
+
+
+# --- step 2: SVG fonts -> TypeScript ------------------------------------------
+
+def parse_path(d):
+    """SVG font path (M/L only, as in Hershey fonts) -> points, None = pen up."""
+    path = []
+    for cmd in re.findall(r'[MLZmlz][^MLZmlz]*', d):
+        code = cmd[0].upper()
+        nums = list(map(float, re.findall(r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?', cmd[1:])))
+        if code == 'M':
+            path.append(None)
+        if code in 'ML':
+            path += [[nums[i], nums[i + 1]] for i in range(0, len(nums) - 1, 2)]
+        elif code == 'Z':
+            path.append(None)
+    return path
+
+
+def parse_svg_font(path):
+    font = ET.parse(path).getroot().find(f'.//{SVG_NS}font')
+    if font is None:
+        raise ValueError(f'{path}: no <font> element')
+    default_adv = float(font.get('horiz-adv-x', '0'))
+    glyphs = {}
+    for g in font.findall(f'{SVG_NS}glyph'):
+        ch, d = g.get('unicode'), g.get('d')
+        if not ch or not d or not ch.isprintable():
+            continue
+        glyphs[ch] = {'paths': parse_path(d), 'horiz_adv_x': float(g.get('horiz-adv-x', default_adv))}
+    return glyphs
+
+
+def num(v):
+    s = f'{v:.2f}'.rstrip('0').rstrip('.')
+    return '0' if s == '-0' else s
+
+
+def font_to_ts(label, glyphs):
+    lines = [f'    {json.dumps(label)}: {{ glyphs: {{']
+    for ch, g in glyphs.items():
+        pts = ', '.join('null' if p is None else f'[{num(p[0])}, {num(p[1])}]' for p in g['paths'])
+        lines.append(f'        {json.dumps(ch)}: {{ horiz_adv_x: {num(g["horiz_adv_x"])}, paths: [{pts}] }},')
+    lines.append('    } },')
+    return '\n'.join(lines)
+
+
+def replace_between(text, start, end, body, path):
+    pattern = re.compile(re.escape(start) + r'.*?' + re.escape(end), re.S)
+    if not pattern.search(text):
+        sys.exit(f'Markers {start!r} / {end!r} not found in {path}')
+    return pattern.sub(lambda _: f'{start}\n{body}\n{end}', text, count=1)
+
+
+def write_code(fonts):
+    blocks = []
+    for f in fonts:
+        glyphs = parse_svg_font(os.path.join(FONTS_DIR, f['svg']))
+        blocks.append(font_to_ts(f['label'], glyphs))
+        print(f'  {f["label"]}: {len(glyphs)} glyphs')
+
+    ts = ('// Generated by tools/build_fonts.py from tools/fonts.json. Do not edit by hand.\n'
+          'type FontData = { glyphs: { [key: string]: { paths: Array<[number, number] | null>, horiz_adv_x: number } } };\n'
+          'const FONTS: { [label: string]: FontData } = {\n' + '\n'.join(blocks) + '\n};')
+    with open(CODE_TS) as fh:
+        code = fh.read()
+    code = replace_between(code, '// fonts:start', '// fonts:end', ts, CODE_TS)
+    with open(CODE_TS, 'w') as fh:
+        fh.write(code)
+
+    def esc(s):
+        return s.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
+
+    options = '\n'.join(f'        <option value="{esc(f["label"])}">{esc(f["label"])}</option>' for f in fonts)
+    with open(UI_HTML) as fh:
+        ui = fh.read()
+    ui = replace_between(ui, '<!-- fonts:start -->', '<!-- fonts:end -->', options, UI_HTML)
+    with open(UI_HTML, 'w') as fh:
+        fh.write(ui)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--force', action='store_true', help='re-convert all outline fonts')
+    ap.add_argument('--only', action='append', metavar='LABEL', help='re-convert only this font (repeatable)')
+    args = ap.parse_args()
+
+    with open(CONFIG) as fh:
+        fonts = json.load(fh)['fonts']
+    labels = [f['label'] for f in fonts]
+    if len(set(labels)) != len(labels):
+        sys.exit('Duplicate labels in fonts.json')
+    for name in args.only or []:
+        if name not in labels:
+            sys.exit(f'--only {name!r}: no such label in fonts.json')
+
+    sys.path.insert(0, TOOLS)
+    convert_outlines(fonts, args.force, args.only)
+
+    missing = [f['svg'] for f in fonts if not os.path.exists(os.path.join(FONTS_DIR, f['svg']))]
+    if missing:
+        sys.exit(f'Missing SVG fonts in /fonts: {", ".join(missing)}')
+
+    print('Writing code.ts and ui.html')
+    write_code(fonts)
+    print('Done. Now run: npm run build')
+
+
+if __name__ == '__main__':
+    main()
